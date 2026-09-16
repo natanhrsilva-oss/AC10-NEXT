@@ -1,0 +1,14 @@
+[versions]
+pre_model = "AC10-NEXT-PRE-0.1.0"
+live_model = "AC10-NEXT-LIVE-0.1.0"
+calibration = "AC10-NEXT-CAL-0.1.0"
+schema = "1"
+
+[pregame]
+recent_weight = 0.75
+historical_weight = 0.25
+history_lookback_days = 730
+
+[operational]
+min_back_odd = 1.60
+max_model_market_gap_pp = 20.0

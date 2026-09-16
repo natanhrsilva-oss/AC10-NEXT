@@ -1,0 +1,22 @@
+[live]
+minute_start = 10
+minute_end = 88
+fast_lane_seconds = 300
+discovery_lane_seconds = 600
+snapshot_minute_delta = 3
+max_stats_concurrency = 12
+request_timeout_seconds = 12.0
+
+[quality]
+min_recommendation = 58.0
+
+[first_scan]
+enabled_exception = true
+min_market_quality = 72.0
+
+[windows]
+ht_end = 37
+back_only_start = 38
+back_only_end = 65
+ft_goal_start = 66
+ft_goal_end = 88
