@@ -36,11 +36,26 @@ def _contexts(m: PregameFeatures, hop: float, aop: float) -> dict[str,float]:
 
 
 def _draw_risk(m: PregameFeatures) -> float:
-    market_draw=50.0
-    if all(x>1 for x in (m.home_odd,m.draw_odd,m.away_odd)):
-        implied=[1/m.home_odd,1/m.draw_odd,1/m.away_odd]; total=sum(implied); market_draw=implied[1]/total*100 if total else 50
-    parity=clamp(100-abs(m.home_weight-m.away_weight)*2.2-abs(m.expected_home_goals-m.expected_away_goals)*35-abs(m.home_recent_form-m.away_recent_form)*.8,0,100)
-    return clamp(market_draw*1.45+parity*.55,0,100)
+    """Estimate draw risk on a calibrated 0-100 scale.
+
+    v0.4.2 accidentally added 145% of the market draw component plus 55% of
+    parity, which systematically inflated the result and vetoed strong BACKs.
+    v0.4.3 uses a true weighted average. Without usable 1X2 odds we use a
+    neutral 28% draw prior; odds are informative, never required.
+    """
+    market_draw = 28.0
+    if all(x > 1 for x in (m.home_odd, m.draw_odd, m.away_odd)):
+        implied = [1 / m.home_odd, 1 / m.draw_odd, 1 / m.away_odd]
+        total = sum(implied)
+        market_draw = implied[1] / total * 100 if total else 28.0
+    parity = clamp(
+        100
+        - abs(m.home_weight - m.away_weight) * 2.2
+        - abs(m.expected_home_goals - m.expected_away_goals) * 35
+        - abs(m.home_recent_form - m.away_recent_form) * .8,
+        0, 100,
+    )
+    return clamp(market_draw * .55 + parity * .45, 0, 100)
 
 
 def build_context(m: PregameFeatures, candidates: list[StrategyCandidate], model_version: str) -> PregameContext:

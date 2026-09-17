@@ -198,8 +198,10 @@ def _iter_odds_markets(payload: dict[str, Any], bookmaker: str, allowed_types: s
             market_bookmaker = normalize_name(str(market.get("bookmakerName") or market.get("bookmaker") or ""))
             if market_bookmaker and market_bookmaker != target_bookmaker:
                 continue
-            odds_type = normalize_name(str(market.get("type") or "prematch"))
-            if odds_type and odds_type not in allowed_types:
+            odds_type = normalize_name(str(market.get("type") or ""))
+            normalized_allowed = {normalize_name(x) for x in allowed_types}
+            # Some feeds omit `type`; the endpoint query already scopes prematch/live.
+            if odds_type and odds_type not in normalized_allowed:
                 continue
             out.append(market)
     return out
@@ -221,7 +223,7 @@ def _full_time_result(markets: list[dict[str, Any]]) -> dict[str, float]:
     result = {"home": 0.0, "draw": 0.0, "away": 0.0}
     for market in markets:
         name = _market_name(market.get("market") or market.get("name"))
-        if name not in {"FULL TIME RESULT", "1X2", "ML", "MONEYLINE", "3-WAY MONEYLINE", "3 WAY MONEYLINE"}:
+        if name not in {"FULL TIME RESULT", "MATCH RESULT", "1X2", "1 X 2", "ML", "MONEYLINE", "3-WAY MONEYLINE", "3 WAY MONEYLINE"}:
             continue
         parsed: dict[str, float] = {}
         for item in market.get("values") or []:
@@ -246,7 +248,7 @@ def _total_over(markets: list[dict[str, Any]], target_line: float) -> float:
     best = 0.0
     for market in markets:
         name = _market_name(market.get("market") or market.get("name"))
-        if not (name.startswith("TOTAL GOALS") or name in {"TOTALS", "MATCH TOTALS", "GOALS OVER/UNDER"}):
+        if not (name.startswith("TOTAL GOALS") or name.startswith("OVER UNDER") or name in {"TOTALS", "MATCH TOTALS", "GOALS OVER/UNDER", "OVER/UNDER"}):
             continue
         base_line = _market_line(market)
         over = under = 0.0
@@ -280,7 +282,7 @@ def extract_highlightly_main_odds(payload: dict[str, Any], bookmaker: str = "Bet
     # capture under 2.5 for diagnostics without changing the PRE logic
     for market in markets:
         name = _market_name(market.get("market") or market.get("name"))
-        if not (name.startswith("TOTAL GOALS") or name in {"TOTALS", "MATCH TOTALS", "GOALS OVER/UNDER"}):
+        if not (name.startswith("TOTAL GOALS") or name.startswith("OVER UNDER") or name in {"TOTALS", "MATCH TOTALS", "GOALS OVER/UNDER", "OVER/UNDER"}):
             continue
         line = _market_line(market)
         if line is None or abs(line - 2.5) > 0.001:
@@ -350,3 +352,27 @@ def first_half_goal_count(events: list[dict[str, Any]]) -> int:
                     counted.pop(i)
                     break
     return len(counted)
+
+
+def highlightly_odds_diagnostics(payload: dict[str, Any], bookmaker: str = "Bet365") -> dict[str, Any]:
+    """Small safe summary for logs; never includes API credentials."""
+    rows = payload.get("data") or [] if isinstance(payload, dict) else []
+    all_markets=[]
+    bookmakers=[]
+    for row in rows if isinstance(rows, list) else []:
+        for market in row.get("odds") or []:
+            if not isinstance(market, dict):
+                continue
+            name=str(market.get("market") or market.get("name") or "")
+            book=str(market.get("bookmakerName") or market.get("bookmaker") or "")
+            if name and name not in all_markets: all_markets.append(name)
+            if book and book not in bookmakers: bookmakers.append(book)
+    plan=payload.get("plan") if isinstance(payload, dict) else None
+    return {
+        "rows": len(rows) if isinstance(rows,list) else 0,
+        "markets": all_markets[:12],
+        "bookmakers": bookmakers[:8],
+        "requested_bookmaker": bookmaker,
+        "plan_tier": plan.get("tier") if isinstance(plan,dict) else None,
+        "plan_message": plan.get("message") if isinstance(plan,dict) else None,
+    }

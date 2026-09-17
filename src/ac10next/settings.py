@@ -20,9 +20,9 @@ class Settings(BaseSettings):
     app_hour_start: int = 6
     app_hour_end: int = 23
 
-    pre_model_version: str = "AC10-NEXT-PRE-0.4.2"
-    live_model_version: str = "AC10-NEXT-LIVE-0.4.2"
-    calibration_version: str = "AC10-NEXT-CAL-0.4.2"
+    pre_model_version: str = "AC10-NEXT-PRE-0.4.3"
+    live_model_version: str = "AC10-NEXT-LIVE-0.4.3"
+    calibration_version: str = "AC10-NEXT-CAL-0.4.3"
 
     history_lookback_days: int = 730
     team_profile_cache_hours: int = 24
@@ -45,7 +45,8 @@ class Settings(BaseSettings):
     pre_recommendation_min_margin: float = 3.0
     pre_recommendation_min_precision: float = 63.0
     pre_recommendation_min_ev_percent: float = 0.0
-    pre_recommendation_max_draw_risk: float = 62.0
+    pre_recommendation_max_draw_risk: float = 75.0  # legacy compatibility; no longer a hard veto
+    pre_recommendation_draw_risk_attention: float = 58.0
 
     live_minute_start: int = 10
     live_minute_end: int = 88

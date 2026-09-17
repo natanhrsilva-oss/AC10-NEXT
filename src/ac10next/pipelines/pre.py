@@ -17,7 +17,7 @@ from ac10next.engines.pregame.strategies import evaluate_all
 from ac10next.filters import exclusion_reason
 from ac10next.outputs import discord, sheets
 from ac10next.providers.highlightly import HighlightlyClient
-from ac10next.providers.parsers import extract_highlightly_main_odds, match_record
+from ac10next.providers.parsers import extract_highlightly_main_odds, highlightly_odds_diagnostics, match_record
 from ac10next.repositories.database import Database
 from ac10next.settings import Settings
 
@@ -79,7 +79,12 @@ class PregameBuilder:
                 reverse=True,
             )[:self.settings.pre_max_odds_requests]
             async def odds_one(c:PregameContext):
-                try:return c.match_id,extract_highlightly_main_odds(await self.provider.prematch_odds(c.match_id),self.settings.highlightly_bookmaker)
+                try:
+                    payload = await self.provider.prematch_odds(c.match_id)
+                    parsed = extract_highlightly_main_odds(payload, self.settings.highlightly_bookmaker)
+                    if not any(float(v or 0) > 1 for v in parsed.values()):
+                        LOGGER.info("Odds pré sem mercado utilizável %s: %s", c.match_id, highlightly_odds_diagnostics(payload, self.settings.highlightly_bookmaker))
+                    return c.match_id, parsed
                 except Exception as exc:
                     LOGGER.info("Odds pré indisponíveis %s: %s",c.match_id,exc); return c.match_id,{}
             odds=dict(await asyncio.gather(*(odds_one(c) for c in shortlist))) if shortlist else {}

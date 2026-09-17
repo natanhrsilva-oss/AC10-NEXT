@@ -46,7 +46,7 @@ def precision_score(context: PregameContext) -> float:
     score -= min(8.0, len(risks) * 2.0)
 
     if context.selected_market.startswith("BACK"):
-        score -= max(0.0, context.draw_risk - 45.0) * 0.20
+        score -= max(0.0, context.draw_risk - 55.0) * 0.10
 
     # OBSERVAÇÃO não elimina um jogo forte; apenas perde alguns pontos.
     if specialist.get("status") == "OBSERVAÇÃO":
@@ -95,8 +95,9 @@ def qualification_reasons(
         reasons.append("indice_baixo")
     if score < settings.pre_recommendation_min_precision:
         reasons.append("precision_baixo")
-    if context.selected_market.startswith("BACK") and context.draw_risk > settings.pre_recommendation_max_draw_risk:
-        reasons.append("risco_empate_alto")
+    # v0.4.3: draw risk is no longer a hard veto. It is already reflected as a
+    # small progressive penalty in Precision Score, preventing an artificial
+    # bias that previously removed most BACK candidates.
     # v0.4.2: preço é apenas informativo no PRE.
     # Se houver odd, ela é registrada e o EV pode ser exibido, mas preço ausente,
     # odd baixa, EV negativo ou divergência modelo/mercado NÃO bloqueiam o sinal.
@@ -113,6 +114,8 @@ def soft_flags(context: PregameContext, settings: Settings) -> list[str]:
         flags.append("probabilidade_moderada")
     if context.market_margin < settings.pre_recommendation_min_margin:
         flags.append("margem_curta")
+    if context.selected_market.startswith("BACK") and context.draw_risk >= settings.pre_recommendation_draw_risk_attention:
+        flags.append("risco_empate_atencao")
     return flags
 
 
