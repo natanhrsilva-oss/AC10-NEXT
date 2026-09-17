@@ -114,8 +114,8 @@ async def run_pre(settings: Settings, target_date: str | None = None) -> dict:
             match_map={m.match_id:m for m in eligible}
 
             # PRE recommendation is a high-precision layer, deliberately separate
-            # from Live Readiness. All contexts still feed LIVE; only the strongest
-            # priced candidates are offered as standalone PRE recommendations.
+            # from Live Readiness. All contexts still feed LIVE; only the strongest sporting candidates are offered as standalone PRE recommendations.
+            # Odds, when available, are metadata only and never block the PRE signal.
             pre_recommendations=select_pre_recommendations(contexts,settings)
             pre_funnel=selection_diagnostics(contexts,settings)
             LOGGER.info("PRE recommendation funnel: %s", pre_funnel)

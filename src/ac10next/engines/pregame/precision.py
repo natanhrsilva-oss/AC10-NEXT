@@ -30,7 +30,7 @@ def precision_score(context: PregameContext) -> float:
 
     A v0.4.1 evita transformar cada subindicador em trava absoluta: confiança,
     probabilidade e margem já entram no score. As travas duras ficam apenas nos
-    pontos realmente operacionais (qualidade mínima, índice mínimo, preço e EV).
+    pontos realmente esportivos (qualidade mínima, índice mínimo e consistência do sinal).
     """
     margin_component = clamp(context.market_margin / 15.0 * 100.0, 0.0, 100.0)
     score = (
@@ -97,14 +97,10 @@ def qualification_reasons(
         reasons.append("precision_baixo")
     if context.selected_market.startswith("BACK") and context.draw_risk > settings.pre_recommendation_max_draw_risk:
         reasons.append("risco_empate_alto")
-    if not odd:
-        reasons.append("sem_odd")
-    elif odd < settings.min_recommendation_odd:
-        reasons.append("odd_baixa")
-    if odd and (ev is None or ev < settings.pre_recommendation_min_ev_percent):
-        reasons.append("ev_negativo")
-    if gap is not None and gap > settings.max_model_market_gap_pp:
-        reasons.append("preco_inconsistente")
+    # v0.4.2: preço é apenas informativo no PRE.
+    # Se houver odd, ela é registrada e o EV pode ser exibido, mas preço ausente,
+    # odd baixa, EV negativo ou divergência modelo/mercado NÃO bloqueiam o sinal.
+    # A recomendação PRE é decidida pela leitura esportiva/Precision Score.
     return reasons
 
 

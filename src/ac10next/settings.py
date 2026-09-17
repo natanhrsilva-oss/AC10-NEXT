@@ -20,9 +20,9 @@ class Settings(BaseSettings):
     app_hour_start: int = 6
     app_hour_end: int = 23
 
-    pre_model_version: str = "AC10-NEXT-PRE-0.4.1"
-    live_model_version: str = "AC10-NEXT-LIVE-0.4.1"
-    calibration_version: str = "AC10-NEXT-CAL-0.4.1"
+    pre_model_version: str = "AC10-NEXT-PRE-0.4.2"
+    live_model_version: str = "AC10-NEXT-LIVE-0.4.2"
+    calibration_version: str = "AC10-NEXT-CAL-0.4.2"
 
     history_lookback_days: int = 730
     team_profile_cache_hours: int = 24
