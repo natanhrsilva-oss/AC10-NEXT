@@ -157,6 +157,63 @@ class Database:
             async with conn.cursor() as cur: await cur.executemany(sql,params)
             await conn.commit()
 
+
+    async def insert_pre_recommendations(self, contexts: Iterable[PregameContext], *, pre_model_version: str, calibration_version: str) -> int:
+        rows=list(contexts)
+        if not rows:return 0
+        sql="""
+        insert into ac10_recommendations(match_id,source,market,minute,probability,market_index,confidence,market_odd,fair_odd,ev_percent,status,pre_model_version,live_model_version,calibration_version,dedupe_key,payload)
+        values(%s,'PRE',%s,null,%s,%s,%s,%s,%s,%s,'RECOMENDAÇÃO',%s,null,%s,%s,%s)
+        on conflict(dedupe_key) do nothing
+        """
+        params=[]
+        for c in rows:
+            precision=dict(c.raw.get("precision") or {})
+            odd=precision.get("odd")
+            fair=precision.get("fair_odd")
+            ev=precision.get("ev_percent")
+            dedupe=f"PRE:{pre_model_version}:{c.match_id}:{c.selected_market}"
+            payload={
+                "precision_score":precision.get("score"),
+                "model_confidence":c.confidence,
+                "data_quality":c.data_quality,
+                "market_margin":c.market_margin,
+                "draw_risk":c.draw_risk,
+                "live_priority":c.live_priority,
+                "live_readiness_score":c.live_readiness_score,
+                "entry_home_score":0,
+                "entry_away_score":0,
+                "precision":precision,
+            }
+            params.append((c.match_id,c.selected_market,c.selected_probability,c.selected_index,c.confidence,odd,fair,ev,pre_model_version,calibration_version,dedupe,Jsonb(payload)))
+        async with self.pool.connection() as conn:
+            async with conn.cursor() as cur:
+                before=0
+                for param in params:
+                    await cur.execute(sql,param)
+                    if cur.rowcount and cur.rowcount>0:before+=cur.rowcount
+            await conn.commit()
+        return before
+
+    async def fetch_recommendation_history(self, source: str, limit: int = 1000) -> list[dict[str,Any]]:
+        sql="""
+        select r.id,r.source,r.match_id,r.market,r.minute,r.probability,r.market_index,r.confidence,
+               r.market_odd,r.fair_odd,r.ev_percent,r.status,r.pre_model_version,r.live_model_version,
+               r.calibration_version,r.payload,r.created_at,
+               m.match_date,m.kickoff,m.country,m.competition,m.home_team,m.away_team,
+               a.result,a.profit_units,a.evaluated_at,a.payload as audit_payload
+        from ac10_recommendations r
+        join ac10_matches m on m.match_id=r.match_id
+        left join ac10_audits a on a.recommendation_id=r.id
+        where r.source=%s
+        order by r.created_at desc
+        limit %s
+        """
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(sql,(source,int(limit)))
+                return [dict(row) for row in await cur.fetchall()]
+
     async def insert_recommendations(self, analyses: Iterable[LiveAnalysis], *, live_model_version: str, pre_model_version: str, calibration_version: str) -> int:
         rows=[a for a in analyses if a.status=="RECOMENDAÇÃO"]
         if not rows:return 0
@@ -168,7 +225,7 @@ class Database:
         params=[]
         for a in rows:
             dedupe=f"LIVE:{live_model_version}:{a.match_id}:{a.selected_market}:{a.home_score}-{a.away_score}:{a.minute//5}"
-            params.append((a.match_id,a.selected_market,a.minute,a.selected_probability,a.market_index,a.market_quality,a.market_odd,a.fair_odd,a.ev_percent,a.status,pre_model_version,live_model_version,calibration_version,dedupe,Jsonb({**a.raw,"entry_home_score":a.home_score,"entry_away_score":a.away_score})))
+            params.append((a.match_id,a.selected_market,a.minute,a.selected_probability,a.market_index,a.market_quality,a.market_odd,a.fair_odd,a.ev_percent,a.status,pre_model_version,live_model_version,calibration_version,dedupe,Jsonb({**a.raw,"entry_home_score":a.home_score,"entry_away_score":a.away_score,"confirmation_count":a.confirmation_count,"chance_goal_10":a.chance_goal_10,"over15_more_probability":a.over15_more_probability,"market_quality":a.market_quality,"price_status":a.price_status})))
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.executemany(sql,params)

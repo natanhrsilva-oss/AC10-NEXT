@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from ac10next.engines.audit import evaluate_recommendation
+from ac10next.outputs import sheets
 from ac10next.providers.highlightly import HighlightlyClient
 from ac10next.providers.parsers import FINISHED_STATES, first_half_goal_count, match_record, normalize_state, parse_score
 from ac10next.repositories.database import Database
@@ -32,6 +33,15 @@ async def run_audit(settings: Settings, target_date: str | None = None) -> dict:
                     except Exception:ht_goals=None
                 for rec in recs:
                     result,pnl,detail=evaluate_recommendation(rec,fh,fa,ht_goals=ht_goals); await db.insert_audit(str(rec["id"]),result,pnl,detail); audited+=1; greens+=result=="GREEN"; reds+=result=="RED"; pending_ht+=result=="PENDENTE_HT"
-            await db.upsert_api_usage("highlightly","AUDIT",provider.usage()); metrics={"finished":len(finished),"audited":audited,"green":greens,"red":reds,"pending_ht":pending_ht,"api":provider.usage()}; await db.finish_run(run_id,status="SUCCESS",duration_ms=int((time.perf_counter()-started)*1000),metrics=metrics); return metrics
+            output_errors=[]
+            if settings.sheets_enabled and settings.google_sheets_webapp_url and settings.google_sheets_token:
+                try:
+                    pre_history=await db.fetch_recommendation_history("PRE",settings.sheet_history_limit)
+                    live_history=await db.fetch_recommendation_history("LIVE",settings.sheet_history_limit)
+                    await sheets.send_history(settings.google_sheets_webapp_url,settings.google_sheets_token,"PRE",pre_history,settings.app_timezone)
+                    await sheets.send_history(settings.google_sheets_webapp_url,settings.google_sheets_token,"LIVE",live_history,settings.app_timezone)
+                except Exception as exc:
+                    output_errors.append(f"sheets:{exc}")
+            await db.upsert_api_usage("highlightly","AUDIT",provider.usage()); metrics={"finished":len(finished),"audited":audited,"green":greens,"red":reds,"pending_ht":pending_ht,"output_errors":output_errors,"api":provider.usage()}; await db.finish_run(run_id,status="SUCCESS",duration_ms=int((time.perf_counter()-started)*1000),metrics=metrics); return metrics
         except Exception as exc:
             await db.finish_run(run_id,status="ERROR",duration_ms=int((time.perf_counter()-started)*1000),metrics={},error={"type":type(exc).__name__,"message":str(exc)}); raise

@@ -12,6 +12,7 @@ from ac10next.domain.mappers import team_profile_from_row
 from ac10next.domain.models import MatchRecord, PregameContext, TeamProfile
 from ac10next.engines.pregame.meta import build_context
 from ac10next.engines.pregame.profiles import build_features, make_team_profile
+from ac10next.engines.pregame.precision import decorate_precision, precision_score, select_pre_recommendations
 from ac10next.engines.pregame.strategies import evaluate_all
 from ac10next.filters import exclusion_reason
 from ac10next.outputs import discord, sheets
@@ -72,7 +73,11 @@ class PregameBuilder:
         contexts=[c for c,_ in pairs]
         features={c.match_id:f for c,f in pairs}
         if allow_odds:
-            shortlist=sorted([c for c in contexts if c.selected_index>=self.settings.pre_odds_min_index],key=lambda c:c.selected_index,reverse=True)[:self.settings.pre_max_odds_requests]
+            shortlist=sorted(
+                [c for c in contexts if c.selected_index>=self.settings.pre_odds_min_index],
+                key=lambda c:(precision_score(c),c.confidence,c.selected_index),
+                reverse=True,
+            )[:self.settings.pre_max_odds_requests]
             async def odds_one(c:PregameContext):
                 try:return c.match_id,extract_highlightly_main_odds(await self.provider.prematch_odds(c.match_id),self.settings.highlightly_bookmaker)
                 except Exception as exc:
@@ -86,6 +91,8 @@ class PregameBuilder:
                     c=build_context(f,evaluate_all(f),self.settings.pre_model_version)
                 rebuilt.append(c)
             contexts=rebuilt
+        for c in contexts:
+            decorate_precision(c,self.settings)
         await self.db.upsert_pregame(contexts)
         return contexts
 
@@ -105,20 +112,34 @@ async def run_pre(settings: Settings, target_date: str | None = None) -> dict:
             eligible=[m for m in records if not m.is_excluded and m.home_team_id and m.away_team_id]
             builder=PregameBuilder(settings,db,provider); contexts=await builder.build_for_records(eligible,allow_odds=True)
             match_map={m.match_id:m for m in eligible}
+
+            # PRE recommendation is a high-precision layer, deliberately separate
+            # from Live Readiness. All contexts still feed LIVE; only the strongest
+            # priced candidates are offered as standalone PRE recommendations.
+            pre_recommendations=select_pre_recommendations(contexts,settings)
+            new_pre_recommendations=await db.insert_pre_recommendations(
+                pre_recommendations,
+                pre_model_version=settings.pre_model_version,
+                calibration_version=settings.calibration_version,
+            )
+
             # Outputs are deliberately non-blocking for the sporting pipeline.
             output_errors=[]
             if settings.sheets_enabled and settings.google_sheets_webapp_url and settings.google_sheets_token:
-                try:await sheets.send_pre(settings.google_sheets_webapp_url,settings.google_sheets_token,match_map,contexts)
+                try:
+                    await sheets.send_pre(settings.google_sheets_webapp_url,settings.google_sheets_token,match_map,contexts)
+                    pre_history=await db.fetch_recommendation_history("PRE",settings.sheet_history_limit) if new_pre_recommendations else []
+                    await sheets.send_history(settings.google_sheets_webapp_url,settings.google_sheets_token,"PRE",pre_history,settings.app_timezone)
                 except Exception as exc:output_errors.append(f"sheets:{exc}")
             if settings.pre_discord_enabled and settings.discord_webhook_url:
-                summary=discord.pre_summary(match_map,contexts)
+                summary=discord.pre_summary(match_map,pre_recommendations,total_prepared=len(contexts),limit=settings.pre_recommendation_limit)
                 if summary:
                     key,text=summary
                     if await db.claim_notification(key,"discord",{"content":text}):
                         try:await discord.send(settings.discord_webhook_url,text); await db.mark_notification(key,sent=True)
                         except Exception as exc:await db.mark_notification(key,sent=False,error=str(exc)); output_errors.append(f"discord:{exc}")
             await db.upsert_api_usage("highlightly","PRE",provider.usage())
-            metrics={"matches_found":len(records),"eligible":len(eligible),"contexts":len(contexts),"priority_A":sum(c.live_priority=="A" for c in contexts),"priority_B":sum(c.live_priority=="B" for c in contexts),"output_errors":output_errors,"api":provider.usage()}
+            metrics={"matches_found":len(records),"eligible":len(eligible),"contexts":len(contexts),"priority_A":sum(c.live_priority=="A" for c in contexts),"priority_B":sum(c.live_priority=="B" for c in contexts),"pre_recommendations":len(pre_recommendations),"new_pre_recommendations":new_pre_recommendations,"output_errors":output_errors,"api":provider.usage()}
             await db.finish_run(run_id,status="SUCCESS",duration_ms=int((time.perf_counter()-started)*1000),metrics=metrics)
             return metrics
         except Exception as exc:

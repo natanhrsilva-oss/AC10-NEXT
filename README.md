@@ -1,54 +1,89 @@
-# AC10 Next v0.3.1
+# AC10 Next v0.4.0
 
-Nova geração do AC10, estruturada em **PRE → LIVE → AUDIT** e independente do AC10LITE.
+Nova geração do AC10, estruturada em **PRE → LIVE → AUDIT**, com Supabase como fonte operacional de verdade.
 
-## Estado atual
+## O que mudou na v0.4.0
 
-- **AC10 PRE**: coleta jogos, filtros estruturais, perfis recentes/históricos, especialistas pré-game e `pregame_context`.
-- **AC10 LIVE**: usa o PRE persistido, coleta estatísticas de forma assíncrona, trabalha com Fast/Discovery Lane, snapshots incrementais e motor GPI/IDD/pressão/momentum.
-- **Janelas**: 10–37 `GOL HT`; 38–65 **BACK ONLY**; 66–88 `OVER +1 GOL`, com gol direcional apenas quando há dominância clara.
-- **Odds live**: consultadas somente para candidatos `RECOMENDAÇÃO`; BACK usa Full Time Result e `OVER +1 GOL` usa Total Goals no placar atual + 0,5. Mercados sem equivalente oficial ficam `SEM PREÇO LIVE`.
-- **Price guard**: nunca recomenda odd disponível abaixo de 1,60; rejeita EV negativo e preços claramente inconsistentes.
-- **AUDIT**: resultado final + auditoria de `GOL HT` por eventos; não inventa P/L de sinais sem odd.
-- **Supabase**: fonte operacional de verdade. Sheets e Discord são saídas não bloqueantes.
+### PRE de alta confiança
 
-## Secrets já usados
+O PRE continua preparando **todos os jogos elegíveis** para o LIVE, mas recomenda ao usuário somente uma camada de alta precisão:
 
-Obrigatórios:
+- `PRE Precision Score` separado do `Live Readiness`;
+- no máximo **10 recomendações PRE**;
+- pode enviar menos de 10 ou **nenhuma**;
+- exige qualidade, confiança, índice, margem entre mercados, especialista aprovado, odd >= 1,60 e preço coerente;
+- odds PRE são consultadas apenas para a shortlist de até 20 candidatos, reduzindo consumo;
+- recomendações PRE são gravadas em `ac10_recommendations` e auditadas normalmente.
 
-```text
-SUPABASE_DATABASE_URL
-HIGHLIGHTLY_API_KEY
-```
+### LIVE: SINAL → PREÇO → RECOMENDAÇÃO
 
-Discord:
+O motor esportivo agora produz `SINAL` quando os critérios estão completos. A entrada só vira `RECOMENDAÇÃO` depois de encontrar preço real aceitável:
 
 ```text
-DISCORD_WEBHOOK_URL
+sinal esportivo + odd >= 1,60 + EV >= 0 + preço coerente = RECOMENDAÇÃO
 ```
 
-Sheets (opcional):
+Sem preço, fica `SINAL`; odd baixa/EV negativo bloqueiam a entrada.
 
-```text
-GOOGLE_SHEETS_WEBAPP_URL
-GOOGLE_SHEETS_TOKEN
-```
+### Pós-gol e mudança de estado
+
+Quando o placar aumenta entre scans, o AC10 aplica cooldown na chance de outro gol:
+
+- 0–2 min: fator 0,75 e bloqueio de novo sinal de gol;
+- 3–5 min: fator 0,85;
+- 6–8 min: fator 0,92;
+- 9–10 min: fator 0,96;
+- depois de 10 min: normal.
+
+Cartão vermelho novo também cria uma curta janela de reconstrução do estado do jogo.
+
+### Proteção contra dados estagnados
+
+Se o minuto avança mas as principais estatísticas permanecem idênticas por scans sucessivos, a qualidade é reduzida. A partir do segundo scan estagnado, um novo `SINAL` é bloqueado até chegar dado fresco.
+
+## Google Sheets
+
+A planilha passa a ter quatro abas:
+
+- `AC10 PRE` — panorama completo do dia;
+- `AC10 LIVE` — estado atual;
+- `HISTÓRICO PRE` — recomendações PRE, resultado e P/L;
+- `HISTÓRICO LIVE` — recomendações LIVE, resultado e P/L.
+
+No LIVE:
+
+- linhas alternadas em azul claro / azul mais escuro;
+- métricas >55 em verde;
+- 45–55 em amarelo;
+- <45 em vermelho;
+- linha inteira verde somente quando `Status = RECOMENDAÇÃO`.
+
+Os históricos fazem upsert pelo UUID da recomendação e o AUDIT atualiza `GREEN`, `RED` e P/L.
+
+> Após atualizar `google-apps-script/Code.gs`, é obrigatório publicar uma **nova versão do Web App** no Apps Script. A URL pode permanecer a mesma.
+
+## Janelas LIVE
+
+- 10–37: `GOL HT` / gol direcional;
+- 38–65: **BACK ONLY**;
+- 66–88: `OVER +1 GOL`, com gol direcional apenas quando há dominância clara.
 
 ## GitHub Actions
 
-- `00 - Infra Check` — diagnóstico manual.
-- `10 - AC10 PRE` — 06:05, 10:05, 14:05 e 18:05 (São Paulo), além de manual.
-- `20 - AC10 LIVE` — a cada 5 minutos na janela 06:00–23:59, com controle interno Fast/Discovery Lane.
-- `30 - AC10 AUDIT` — diariamente, auditando por padrão o dia anterior.
-- `40 - Health` — saúde da infraestrutura.
-- `90 - Tests` — testes.
+- `00 - Infra Check`
+- `10 - AC10 PRE`
+- `20 - AC10 LIVE`
+- `30 - AC10 AUDIT`
+- `40 - Health`
+- `90 - Tests`
 
-## Primeiro uso
+## Ordem recomendada após instalar a v0.4.0
 
-1. Confirme o `00 - Infra Check` verde.
-2. Rode manualmente `10 - AC10 PRE`.
-3. Verifique `ac10_matches`, `ac10_team_profiles` e `ac10_pregame_context` no Supabase.
-4. Rode `20 - AC10 LIVE` com `force=true` durante uma partida elegível.
-5. Só depois conecte Google Sheets, se desejar. O Discord já funciona apenas com seu secret.
+1. Atualize o repositório.
+2. Atualize e redeploy o `google-apps-script/Code.gs`.
+3. Rode `90 - Tests`.
+4. Rode `10 - AC10 PRE` manualmente.
+5. Aguarde pelo menos dois scans LIVE para reconstruir momentum na nova versão.
+6. Rode `20 - AC10 LIVE` normalmente.
 
-> A API de odds live da Highlightly depende de cobertura/plano. Se não estiver disponível, o motor continua funcionando e marca o candidato como `SEM PREÇO LIVE`. Defina `LIVE_REQUIRE_PRICE_FOR_RECOMMENDATION=true` se quiser bloquear recomendações sem odd.
+Não há migration SQL obrigatória nesta versão; as tabelas atuais já suportam os novos dados via `raw/payload` e `ac10_recommendations`.

@@ -63,7 +63,7 @@ async def run_live(settings: Settings, *, force: bool = False) -> dict:
             ids=[m.match_id for m in live_records]; latest=await db.fetch_live_latest(ids,settings.live_model_version)
             due=[]
             for m in live_records:
-                p=pre[m.match_id]; prev=latest.get(m.match_id); fast=p.live_priority in {"A","B"} or (prev and (prev.get("status") in {"AQUECENDO","RECOMENDAÇÃO"} or float(prev.get("market_index") or 0)>=50))
+                p=pre[m.match_id]; prev=latest.get(m.match_id); fast=p.live_priority in {"A","B"} or (prev and (prev.get("status") in {"AQUECENDO","SINAL","RECOMENDAÇÃO"} or float(prev.get("market_index") or 0)>=50))
                 if force or _due(now_utc,prev,fast,settings):due.append((0 if fast else 1,-p.live_readiness_score,m))
             due=[x[2] for x in sorted(due,key=lambda x:(x[0],x[1]))[:settings.live_max_stats_requests_per_run]]
             if not due:
@@ -83,7 +83,7 @@ async def run_live(settings: Settings, *, force: bool = False) -> dict:
             # has produced genuine recommendation candidates. This keeps the
             # expensive/slow odds endpoint out of the normal scan path.
             price_candidates=sorted(
-                [a for a in analyses if a.status=="RECOMENDAÇÃO"],
+                [a for a in analyses if a.status=="SINAL"],
                 key=lambda a:(a.market_index,a.confirmation_count,a.selected_probability),
                 reverse=True,
             )[:settings.live_max_odds_requests_per_run]
@@ -106,7 +106,10 @@ async def run_live(settings: Settings, *, force: bool = False) -> dict:
             rec_count=await db.insert_recommendations(analyses,live_model_version=settings.live_model_version,pre_model_version=settings.pre_model_version,calibration_version=settings.calibration_version)
             match_map={m.match_id:m for m in due}; pre_due={m.match_id:pre[m.match_id] for m in due}; output_errors=[]
             if settings.sheets_enabled and settings.google_sheets_webapp_url and settings.google_sheets_token:
-                try:await sheets.send_live(settings.google_sheets_webapp_url,settings.google_sheets_token,match_map,analyses,pre_due)
+                try:
+                    await sheets.send_live(settings.google_sheets_webapp_url,settings.google_sheets_token,match_map,analyses,pre_due)
+                    live_history=await db.fetch_recommendation_history("LIVE",settings.sheet_history_limit) if rec_count else []
+                    await sheets.send_history(settings.google_sheets_webapp_url,settings.google_sheets_token,"LIVE",live_history,settings.app_timezone)
                 except Exception as exc:output_errors.append(f"sheets:{exc}")
             if settings.live_discord_enabled and settings.discord_webhook_url:
                 summary=discord.live_summary(match_map,analyses,pre_due,min_index=settings.live_summary_min_index,limit=settings.live_summary_limit)
@@ -116,7 +119,7 @@ async def run_live(settings: Settings, *, force: bool = False) -> dict:
                         try:await discord.send(settings.discord_webhook_url,text); await db.mark_notification(key,sent=True)
                         except Exception as exc:await db.mark_notification(key,sent=False,error=str(exc)); output_errors.append(f"discord:{exc}")
             await db.upsert_api_usage("highlightly","LIVE",provider.usage())
-            metrics={"active":len(live_records),"due":len(due),"processed":len(analyses),"above_55":sum(a.market_index>=settings.live_summary_min_index for a in analyses),"recommendations":sum(a.status=="RECOMENDAÇÃO" for a in analyses),"new_recommendations":rec_count,"odds_candidates":len(price_candidates),"priced":sum(a.market_odd is not None for a in analyses),"emergency_pre":emergency,"output_errors":output_errors,"api":provider.usage()}
+            metrics={"active":len(live_records),"due":len(due),"processed":len(analyses),"above_55":sum(a.market_index>=settings.live_summary_min_index for a in analyses),"sporting_candidates":len(price_candidates),"signals_unpriced":sum(a.status=="SINAL" for a in analyses),"recommendations":sum(a.status=="RECOMENDAÇÃO" for a in analyses),"new_recommendations":rec_count,"odds_candidates":len(price_candidates),"priced":sum(a.market_odd is not None for a in analyses),"post_goal_cooldowns":sum(bool((a.raw.get("event_state") or {}).get("post_goal_active")) for a in analyses),"stale_blocks":sum(bool((a.raw.get("data_freshness") or {}).get("stale_block")) for a in analyses),"emergency_pre":emergency,"output_errors":output_errors,"api":provider.usage()}
             await db.finish_run(run_id,status="SUCCESS",duration_ms=int((time.perf_counter()-started)*1000),metrics=metrics); return metrics
         except Exception as exc:
             await db.upsert_api_usage("highlightly","LIVE",provider.usage()); await db.finish_run(run_id,status="ERROR",duration_ms=int((time.perf_counter()-started)*1000),metrics={"api":provider.usage()},error={"type":type(exc).__name__,"message":str(exc)}); raise

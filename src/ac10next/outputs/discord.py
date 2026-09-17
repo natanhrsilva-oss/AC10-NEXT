@@ -16,7 +16,7 @@ def live_summary(matches: dict[str,MatchRecord], analyses: list[LiveAnalysis], p
     lines=[f"⚡ **AC10 LIVE** — {len(eligible)} jogo(s) acima de {min_index:.0f} de índice",""]
     for i,a in enumerate(top,1):
         m=matches[a.match_id]; p=pre.get(a.match_id)
-        emoji="✅" if a.status=="RECOMENDAÇÃO" else "🌡️" if a.status=="AQUECENDO" else "👀"
+        emoji="✅" if a.status=="RECOMENDAÇÃO" else "🎯" if a.status=="SINAL" else "🌡️" if a.status=="AQUECENDO" else "👀"
         lines.append(f"{emoji} **{i}. {m.home_team} x {m.away_team}**")
         lines.append(f"{a.minute}' | **{a.home_score} x {a.away_score}** | Entrada analisada: **{a.selected_market}**")
         lines.append(f"Índice **{a.market_index:.1f}** | Prob. **{a.selected_probability:.1f}%** | GPI {a.gpi:.1f} | Conf. {a.confirmation_count}/5")
@@ -33,16 +33,28 @@ def live_summary(matches: dict[str,MatchRecord], analyses: list[LiveAnalysis], p
     return key,text
 
 
-def pre_summary(matches: dict[str,MatchRecord], contexts: list[PregameContext], limit: int = 5) -> tuple[str,str] | None:
-    top=sorted(contexts,key=lambda x:(x.live_readiness_score,x.selected_index),reverse=True)[:limit]
+def pre_summary(matches: dict[str,MatchRecord], contexts: list[PregameContext], *, total_prepared: int | None = None, limit: int = 10) -> tuple[str,str] | None:
+    # contexts must already be filtered by the PRE Precision layer. If there is
+    # no high-confidence candidate, PRE stays silent instead of filling slots.
+    top=sorted(
+        contexts,
+        key=lambda p:(float((p.raw.get("precision") or {}).get("score") or 0),p.confidence,p.selected_index),
+        reverse=True,
+    )[:limit]
     if not top:return None
-    lines=[f"📅 **AC10 PRE** — {len(contexts)} jogos preparados para o Live",""]
+    prepared=total_prepared if total_prepared is not None else len(contexts)
+    lines=[f"🎯 **AC10 PRE — ALTA CONFIANÇA** — {len(top)} recomendação(ões) de {prepared} jogos preparados","" ]
     for i,p in enumerate(top,1):
-        m=matches[p.match_id]
-        lines.append(f"**{i}. {m.home_team} x {m.away_team}** — Prioridade {p.live_priority}")
-        lines.append(f"{p.selected_market} | Índice {p.selected_index:.1f} | Prob. {p.selected_probability:.1f}% | Readiness {p.live_readiness_score:.1f}")
-    text="\n".join(lines)
-    key="pre-summary:"+hashlib.sha1("|".join(f"{p.match_id}:{int(p.live_readiness_score//5)}" for p in top).encode()).hexdigest()[:20]
+        m=matches[p.match_id]; precision=dict(p.raw.get("precision") or {})
+        odd=precision.get("odd"); ev=precision.get("ev_percent"); score=precision.get("score")
+        lines.append(f"✅ **{i}. {m.home_team} x {m.away_team}** | {m.kickoff.strftime('%H:%M')}")
+        price=f"Odd **{float(odd):.2f}**" if odd else "Odd ND"
+        evtxt=f"{float(ev):+.1f}%" if ev is not None else "ND"
+        lines.append(f"**{p.selected_market}** | Prob. **{p.selected_probability:.1f}%** | Índice **{p.selected_index:.1f}** | Precision **{float(score or 0):.1f}** | {price} | EV **{evtxt}**")
+        lines.append("")
+    text="\n".join(lines).strip()
+    key_obj=[(p.match_id,p.selected_market) for p in top]
+    key="pre-summary:"+hashlib.sha1(json.dumps(key_obj,sort_keys=True).encode()).hexdigest()[:20]
     return key,text
 
 

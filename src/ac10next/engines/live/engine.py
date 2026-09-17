@@ -105,6 +105,71 @@ def _goal_watch(inp: LiveInput, gpi: float, quality: float, mov: dict[str,Any], 
     return {"chance":chance,"candidate":candidate,"candidate_prob":candidate_prob,"status":status,"confidence":confidence}
 
 
+def _event_state(inp: LiveInput, previous: dict[str,Any] | None) -> dict[str,Any]:
+    prev_raw=dict((previous or {}).get("raw") or {})
+    prev_event=dict(prev_raw.get("event_state") or {})
+    minute=inp.match.minute
+
+    last_goal_minute=prev_event.get("last_goal_minute")
+    if previous:
+        prev_total=int(number(previous.get("home_score"),0)+number(previous.get("away_score"),0))
+        current_total=inp.match.home_score+inp.match.away_score
+        if current_total>prev_total:
+            # We only know the goal happened between scans. Using the current
+            # minute is intentionally conservative for the cooldown.
+            last_goal_minute=minute
+    minutes_since_goal=None
+    if last_goal_minute is not None:
+        minutes_since_goal=max(0,minute-int(number(last_goal_minute,minute)))
+
+    if minutes_since_goal is None or minutes_since_goal>10:
+        goal_factor=1.0
+    elif minutes_since_goal<=2:
+        goal_factor=.75
+    elif minutes_since_goal<=5:
+        goal_factor=.85
+    elif minutes_since_goal<=8:
+        goal_factor=.92
+    else:
+        goal_factor=.96
+
+    last_red_minute=prev_event.get("last_red_minute")
+    if previous:
+        prev_red=number(previous.get("home_red_cards"),0)+number(previous.get("away_red_cards"),0)
+        current_red=inp.stats.home_red_cards+inp.stats.away_red_cards
+        if current_red>prev_red:
+            last_red_minute=minute
+    minutes_since_red=None
+    if last_red_minute is not None:
+        minutes_since_red=max(0,minute-int(number(last_red_minute,minute)))
+
+    post_goal_active=minutes_since_goal is not None and minutes_since_goal<=10
+    red_reset_active=minutes_since_red is not None and minutes_since_red<=4
+    return {
+        "last_goal_minute":last_goal_minute,
+        "minutes_since_goal":minutes_since_goal,
+        "goal_factor":goal_factor,
+        "post_goal_active":post_goal_active,
+        "hard_goal_cooldown":minutes_since_goal is not None and minutes_since_goal<=2,
+        "last_red_minute":last_red_minute,
+        "minutes_since_red":minutes_since_red,
+        "red_reset_active":red_reset_active,
+    }
+
+
+def _data_freshness(inp: LiveInput, previous: dict[str,Any] | None) -> dict[str,Any]:
+    if not previous:
+        return {"stale_scans":0,"factor":1.0,"stale_block":False,"stats_changed":True}
+    current=(inp.stats.home_shots,inp.stats.away_shots,inp.stats.home_sot,inp.stats.away_sot,inp.stats.home_corners,inp.stats.away_corners,inp.stats.home_dangerous,inp.stats.away_dangerous)
+    prior=(number(previous.get("home_shots")),number(previous.get("away_shots")),number(previous.get("home_sot")),number(previous.get("away_sot")),number(previous.get("home_corners")),number(previous.get("away_corners")),number(previous.get("home_dangerous")),number(previous.get("away_dangerous")))
+    stats_changed=any(abs(a-b)>.01 for a,b in zip(current,prior))
+    minute_advanced=inp.match.minute>int(number(previous.get("minute"),inp.match.minute))
+    prev_raw=dict(previous.get("raw") or {}); prev_fresh=dict(prev_raw.get("data_freshness") or {})
+    stale_scans=int(number(prev_fresh.get("stale_scans"),0))+1 if minute_advanced and not stats_changed else 0
+    factor=1.0 if stale_scans<=1 else .90 if stale_scans==2 else .78 if stale_scans==3 else .65
+    return {"stale_scans":stale_scans,"factor":factor,"stale_block":stale_scans>=2,"stats_changed":stats_changed}
+
+
 def _over15_more(inp: LiveInput, gpi: float, hpress: float, apress: float, hneed: float, aneed: float, mov: dict[str,Any], hp: TeamPersona, ap: TeamPersona) -> float:
     remaining=max(0,96-inp.match.minute)
     if remaining<=1:return 0.0
@@ -117,6 +182,7 @@ def _over15_more(inp: LiveInput, gpi: float, hpress: float, apress: float, hneed
 
 
 def analyze(inp: LiveInput, previous: dict[str,Any] | None, history: list[dict[str,Any]]) -> LiveAnalysis:
+    event_state=_event_state(inp,previous); freshness=_data_freshness(inp,previous)
     hp,ap=persona(inp,True),persona(inp,False); hpress,apress=team_pressure(inp,True),team_pressure(inp,False); activity=activity_score(inp); hneed,aneed=necessity_score(inp,True),necessity_score(inp,False)
     hrp,hm,hmi,hms,hdeltas,hcomp=interval_pressure(inp,previous,True,hpress,history); arp,am,ami,ams,adeltas,acomp=interval_pressure(inp,previous,False,apress,history); comparison=hcomp and acomp
     live=clamp(activity*.55+max(hpress,apress)*.30+min(hpress,apress)*.15,0,1)
@@ -128,6 +194,7 @@ def analyze(inp: LiveInput, previous: dict[str,Any] | None, history: list[dict[s
     hi=_team_back_index(inp,True,hp,ap,hpress,apress,hm,am,hneed,comparison); ai=_team_back_index(inp,False,ap,hp,apress,hpress,am,hm,aneed,comparison); hprob,aprob=_back_probabilities(inp,gpi,hi,ai)
     hallowed=_back_allowed(inp,True,hi,ai,hprob,hpress,hm,am,comparison); aallowed=_back_allowed(inp,False,ai,hi,aprob,apress,am,hm,comparison)
     minute=inp.match.minute; back_only=38<=minute<=65; baseline="GOL HT" if minute<=37 else "OVER +1 GOL"; goalprob=goal_probability(inp,gpi,"GOL HT" if minute<=37 else "OVER +1 GOL")
+    goal_factor=float(event_state["goal_factor"]); goalprob*=goal_factor
     market=baseline; idx=gpi; prob=goalprob*100; selected_pressure=max(hpress,apress)*100; selected_recent=max(hrp,arp) if comparison else 0; selected_mom=max(hm,am) if comparison else 0; back_allowed=False
     choose_home=hi>=ai
     if back_only:
@@ -137,7 +204,11 @@ def analyze(inp: LiveInput, previous: dict[str,Any] | None, history: list[dict[s
         choose_home=hallowed and (not aallowed or hi>=ai); best=hi if choose_home else ai; opp=ai if choose_home else hi; bp=hprob if choose_home else aprob; bp_press=hpress if choose_home else apress; bp_recent=hrp if choose_home else arp; bp_mom=hm if choose_home else am
         back_conv=best+min(8,max(0,best-opp)*.22)+bp*5; goal_conv=gpi+(3 if min(hpress,apress)>=.55 else 0)
         if back_conv>=goal_conv+2 or (best>=85 and abs(hi-ai)>=15): market="BACK CASA" if choose_home else "BACK VISITANTE"; idx=best; prob=bp*100; selected_pressure=bp_press*100; selected_recent=bp_recent if comparison else 0; selected_mom=bp_mom if comparison else 0; back_allowed=True
-    quality=_market_quality(inp,market); mov=movement(history,inp); watch=_goal_watch(inp,gpi,quality,mov,hp,ap,hpress,apress,hi,ai)
+    quality=clamp(_market_quality(inp,market)*float(freshness["factor"]),0,100); mov=movement(history,inp); watch=_goal_watch(inp,gpi,quality,mov,hp,ap,hpress,apress,hi,ai)
+    if goal_factor<1.0:
+        watch["chance"]=clamp(number(watch.get("chance"))*goal_factor,0,100)
+        watch["candidate_prob"]=clamp(number(watch.get("candidate_prob"))*goal_factor,0,100)
+        if event_state["hard_goal_cooldown"] and watch.get("status")=="RECOMENDADO":watch["status"]="AQUECENDO"
     if not market.startswith("BACK") and not back_only:
         # Até 37': o watcher pode escolher gol HT ou gol direcional.
         # De 66' em diante, o mercado-base oficial é OVER +1 GOL. Gol direcional
@@ -153,21 +224,34 @@ def analyze(inp: LiveInput, previous: dict[str,Any] | None, history: list[dict[s
         sel=hi if market=="BACK CASA" else ai; opp=ai if market=="BACK CASA" else hi
         confirmations={"indice":back_allowed and sel>=72,"direcao":sel-opp>=9,"pressao":selected_pressure>=52,"probabilidade":prob>=20,"evolucao":comparison and selected_mom>=-4}
         count=sum(confirmations.values()); exceptional=(not comparison and back_allowed and sel>=86 and sel-opp>=18 and selected_pressure>=70 and prob>=25 and quality>=70)
-        status="SEM ENTRADA" if not inp.stats.available or quality<58 or (back_only and not back_allowed) else "RECOMENDAÇÃO" if ((comparison and back_allowed and count>=4) or exceptional) else "AQUECENDO" if back_allowed or count>=3 else "SEM ENTRADA"
+        status="SEM ENTRADA" if not inp.stats.available or quality<58 or (back_only and not back_allowed) else "SINAL" if ((comparison and back_allowed and count>=4) or exceptional) else "AQUECENDO" if back_allowed or count>=3 else "SEM ENTRADA"
     else:
         bucket=_goal_bucket(minute,"GOL HT" if minute<=37 else "OVER +1 GOL"); th=GOAL_BUCKETS[bucket]
         confirmations={"gpi":gpi>=th["gpi"],"tempo_prob":prob>=th["prob"],"execucao_live":selected_pressure>=th["pressure"] and activity*100>=th["activity"],"evolucao_recente":comparison and selected_recent>=54 and selected_mom>=-4,"qualidade_contexto":quality>=58 and hist>=.45}
         count=sum(confirmations.values()); exceptional=(not comparison and gpi>=th["gpi"]+8 and prob>=th["prob"]+5 and selected_pressure>=72 and activity*100>=68 and quality>=72 and hist>=.55)
-        status="SEM ENTRADA" if not inp.stats.available or quality<58 or back_only else "RECOMENDAÇÃO" if ((comparison and count>=4 and watch["status"] in {"RECOMENDADO","AQUECENDO"}) or exceptional) else "AQUECENDO" if count>=3 or gpi>=th["gpi"]-5 or watch["status"]=="AQUECENDO" else "SEM ENTRADA"
-    # No primeiro scan, recommendation remains exceptional-only by construction.
-    market_odd=None; ev=None; fodd=fair_odd(prob/100) if prob>0 else None; price_status="SEM PREÇO LIVE"
+        status="SEM ENTRADA" if not inp.stats.available or quality<58 or back_only else "SINAL" if ((comparison and count>=4 and watch["status"] in {"RECOMENDADO","AQUECENDO"}) or exceptional) else "AQUECENDO" if count>=3 or gpi>=th["gpi"]-5 or watch["status"]=="AQUECENDO" else "SEM ENTRADA"
+    # Event reset: a brand-new goal temporarily suppresses another goal signal;
+    # a fresh red card suppresses every new entry until the game rebuilds state.
+    if status=="SINAL" and freshness["stale_block"]:
+        status="AQUECENDO"
+    if status=="SINAL" and event_state["red_reset_active"]:
+        status="AQUECENDO"
+    if status=="SINAL" and not market.startswith("BACK") and event_state["hard_goal_cooldown"]:
+        status="AQUECENDO"
+
+    # Sporting approval is SINAL. Only a valid priced market promotes it to
+    # RECOMENDAÇÃO in the pricing layer.
+    market_odd=None; ev=None; fodd=fair_odd(prob/100) if prob>0 else None; price_status="AGUARDANDO PREÇO" if status=="SINAL" else "SEM PREÇO LIVE"
     over15=_over15_more(inp,gpi,hpress,apress,hneed,aneed,mov,hp,ap)
+    if goal_factor<1.0:
+        over15*=1-(1-goal_factor)*.55
     raw={
         "pregame":{"priority":inp.pre.live_priority,"market":inp.pre.selected_market,"probability":inp.pre.selected_probability,"index":inp.pre.selected_index},
         "personas":{"home":hp.name,"away":ap.name},"confirmations":confirmations,"comparison_ok":comparison,
         "movement":{"evolution":mov.get("evolution"),"delta":mov.get("delta"),"samples":mov.get("samples")},
         "goal_watch":watch,"entry_analyzed":market,"live_score":f"{inp.match.home_score} x {inp.match.away_score}",
         "recent_deltas":{"home":hdeltas,"away":adeltas},
+        "event_state":event_state,"data_freshness":freshness,
     }
     fp_obj={"minute_bucket":minute//3,"score":[inp.match.home_score,inp.match.away_score],"stats":[round(inp.stats.home_shots),round(inp.stats.away_shots),round(inp.stats.home_sot),round(inp.stats.away_sot),round(inp.stats.home_corners),round(inp.stats.away_corners),round(inp.stats.home_dangerous/3),round(inp.stats.away_dangerous/3)],"market":market,"status":status,"index_bucket":int(idx//3)}
     fingerprint=hashlib.sha1(json.dumps(fp_obj,sort_keys=True).encode()).hexdigest()[:20]

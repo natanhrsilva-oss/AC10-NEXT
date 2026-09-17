@@ -1,7 +1,7 @@
 [versions]
-pre_model = "AC10-NEXT-PRE-0.3.1"
-live_model = "AC10-NEXT-LIVE-0.3.1"
-calibration = "AC10-NEXT-CAL-0.3.1"
+pre_model = "AC10-NEXT-PRE-0.4.0"
+live_model = "AC10-NEXT-LIVE-0.4.0"
+calibration = "AC10-NEXT-CAL-0.4.0"
 schema = "1"
 
 [pregame]
@@ -12,3 +12,15 @@ history_lookback_days = 730
 [operational]
 min_back_odd = 1.60
 max_model_market_gap_pp = 20.0
+
+[pre_precision]
+limit = 10
+min_data_quality = 65.0
+min_confidence = 68.0
+min_index = 65.0
+min_probability = 60.0
+min_margin = 6.0
+min_precision = 70.0
+min_ev_percent = 0.0
+max_draw_risk = 55.0
+min_odd = 1.60

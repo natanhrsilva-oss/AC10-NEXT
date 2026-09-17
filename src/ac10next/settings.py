@@ -20,9 +20,9 @@ class Settings(BaseSettings):
     app_hour_start: int = 6
     app_hour_end: int = 23
 
-    pre_model_version: str = "AC10-NEXT-PRE-0.3.1"
-    live_model_version: str = "AC10-NEXT-LIVE-0.3.1"
-    calibration_version: str = "AC10-NEXT-CAL-0.3.1"
+    pre_model_version: str = "AC10-NEXT-PRE-0.4.0"
+    live_model_version: str = "AC10-NEXT-LIVE-0.4.0"
+    calibration_version: str = "AC10-NEXT-CAL-0.4.0"
 
     history_lookback_days: int = 730
     team_profile_cache_hours: int = 24
@@ -35,8 +35,17 @@ class Settings(BaseSettings):
     highlightly_max_retries: int = 4
 
     pre_max_teams_refresh: int = 220
-    pre_max_odds_requests: int = 60
+    pre_max_odds_requests: int = 20
     pre_odds_min_index: float = 55.0
+    pre_recommendation_limit: int = 10
+    pre_recommendation_min_data_quality: float = 65.0
+    pre_recommendation_min_confidence: float = 68.0
+    pre_recommendation_min_index: float = 65.0
+    pre_recommendation_min_probability: float = 60.0
+    pre_recommendation_min_margin: float = 6.0
+    pre_recommendation_min_precision: float = 70.0
+    pre_recommendation_min_ev_percent: float = 0.0
+    pre_recommendation_max_draw_risk: float = 55.0
 
     live_minute_start: int = 10
     live_minute_end: int = 88
@@ -44,16 +53,17 @@ class Settings(BaseSettings):
     live_discovery_lane_seconds: int = 600
     live_max_stats_requests_per_run: int = 80
     live_max_odds_requests_per_run: int = 15
-    live_require_price_for_recommendation: bool = False
+    live_require_price_for_recommendation: bool = True
     live_summary_min_index: float = 55.0
     live_summary_limit: int = 5
+    sheet_history_limit: int = 1000
 
     min_back_odd: float = 1.60
     min_recommendation_odd: float = 1.60
     max_model_market_gap_pp: float = 20.0
     max_recommendation_ev_percent: float = 100.0
 
-    pre_discord_enabled: bool = False
+    pre_discord_enabled: bool = True
     live_discord_enabled: bool = True
     sheets_enabled: bool = True
 

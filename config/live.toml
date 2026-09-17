@@ -20,3 +20,13 @@ back_only_start = 38
 back_only_end = 65
 ft_goal_start = 66
 ft_goal_end = 88
+
+[post_goal_cooldown]
+minutes_0_2_factor = 0.75
+minutes_3_5_factor = 0.85
+minutes_6_8_factor = 0.92
+minutes_9_10_factor = 0.96
+hard_block_minutes = 2
+
+[data_freshness]
+block_after_unchanged_scans = 2
