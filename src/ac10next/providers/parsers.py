@@ -187,19 +187,19 @@ def _valid_odd(value: Any) -> float:
     return odd if 1.001 <= odd <= 100.0 else 0.0
 
 
-def _iter_odds_markets(payload: dict[str, Any], bookmaker: str, allowed_types: set[str]) -> list[dict[str, Any]]:
+def _iter_odds_markets(payload: dict[str, Any], bookmaker: str | None, allowed_types: set[str]) -> list[dict[str, Any]]:
     rows = payload.get("data") or [] if isinstance(payload, dict) else []
-    target_bookmaker = normalize_name(bookmaker)
+    target_bookmaker = normalize_name(bookmaker or "")
+    normalized_allowed = {normalize_name(x) for x in allowed_types}
     out: list[dict[str, Any]] = []
     for row in rows if isinstance(rows, list) else []:
         for market in row.get("odds") or []:
             if not isinstance(market, dict):
                 continue
             market_bookmaker = normalize_name(str(market.get("bookmakerName") or market.get("bookmaker") or ""))
-            if market_bookmaker and market_bookmaker != target_bookmaker:
+            if target_bookmaker and market_bookmaker and market_bookmaker != target_bookmaker:
                 continue
             odds_type = normalize_name(str(market.get("type") or ""))
-            normalized_allowed = {normalize_name(x) for x in allowed_types}
             # Some feeds omit `type`; the endpoint query already scopes prematch/live.
             if odds_type and odds_type not in normalized_allowed:
                 continue
@@ -293,6 +293,52 @@ def extract_highlightly_main_odds(payload: dict[str, Any], bookmaker: str = "Bet
     return result
 
 
+def _bookmakers_in_payload(payload: dict[str, Any], allowed_types: set[str]) -> list[str]:
+    names: list[str] = []
+    for market in _iter_odds_markets(payload, None, allowed_types):
+        name = str(market.get("bookmakerName") or market.get("bookmaker") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _core_odds_coverage(odds: dict[str, float]) -> tuple[int, int]:
+    # Keep one coherent bookmaker per match; never cherry-pick prices across books.
+    full_time = int(bool(odds.get("home") and odds.get("away")))
+    total = sum(int(float(odds.get(k) or 0) > 1.0) for k in ("home", "draw", "away", "over25", "under25"))
+    return full_time + int(bool(odds.get("over25"))), total
+
+
+def extract_highlightly_best_main_odds(
+    payload: dict[str, Any], preferred_bookmaker: str = "Bet365"
+) -> tuple[dict[str, float], str | None]:
+    """Return PRE odds from the preferred book or the best-covered fallback book.
+
+    Highlightly can return HTTP 200 + zero rows for one bookmaker while the same
+    match has prices from others. The preferred bookmaker is used when possible;
+    otherwise we choose a *single* bookmaker with the best core market coverage.
+    """
+    preferred = str(preferred_bookmaker or "").strip()
+    if preferred:
+        strict = extract_highlightly_main_odds(payload, preferred)
+        if any(float(strict.get(k) or 0) > 1 for k in ("home", "away", "over25")):
+            return strict, preferred
+
+    best_odds = {"home": 0.0, "draw": 0.0, "away": 0.0, "over25": 0.0, "under25": 0.0}
+    best_book: str | None = None
+    best_key = (-1, -1)
+    for book in _bookmakers_in_payload(payload, {"prematch", "pre match"}):
+        parsed = extract_highlightly_main_odds(payload, book)
+        key = _core_odds_coverage(parsed)
+        if key > best_key:
+            best_key = key
+            best_odds = parsed
+            best_book = book
+    if best_key <= (0, 0):
+        return best_odds, None
+    return best_odds, best_book
+
+
 def extract_highlightly_live_market_odd(
     payload: dict[str, Any],
     market: str,
@@ -367,12 +413,16 @@ def highlightly_odds_diagnostics(payload: dict[str, Any], bookmaker: str = "Bet3
             book=str(market.get("bookmakerName") or market.get("bookmaker") or "")
             if name and name not in all_markets: all_markets.append(name)
             if book and book not in bookmakers: bookmakers.append(book)
-    plan=payload.get("plan") if isinstance(payload, dict) else None
+    plan=payload.get("plan") if isinstance(payload,dict) else None
+    query_meta=payload.get("_ac10_odds_query") if isinstance(payload,dict) else None
     return {
         "rows": len(rows) if isinstance(rows,list) else 0,
         "markets": all_markets[:12],
         "bookmakers": bookmakers[:8],
         "requested_bookmaker": bookmaker,
+        "query_mode": query_meta.get("mode") if isinstance(query_meta,dict) else None,
+        "preferred_supported": query_meta.get("preferred_supported") if isinstance(query_meta,dict) else None,
         "plan_tier": plan.get("tier") if isinstance(plan,dict) else None,
         "plan_message": plan.get("message") if isinstance(plan,dict) else None,
     }
+

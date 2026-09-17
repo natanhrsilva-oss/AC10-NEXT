@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from ac10next.settings import Settings
+from ac10next.utils import normalize_name
 
 LOGGER = logging.getLogger(__name__)
 
@@ -26,6 +27,9 @@ class HighlightlyClient:
         self.request_counts: Counter[str] = Counter()
         self.error_counts: Counter[str] = Counter()
         self.latency_ms: Counter[str] = Counter()
+        self._bookmaker_supported: bool | None = None
+        self._bookmaker_check_done = False
+        self._bookmaker_check_lock = asyncio.Lock()
 
     async def __aenter__(self):
         return self
@@ -113,24 +117,92 @@ class HighlightlyClient:
             return []
         return list(payload) if isinstance(payload, list) else list(payload.get("data") or [])
 
+    @staticmethod
+    def _payload_rows(payload: Any) -> list[dict[str, Any]]:
+        if isinstance(payload, dict):
+            rows = payload.get("data") or []
+            return [dict(x) for x in rows if isinstance(x, dict)] if isinstance(rows, list) else []
+        if isinstance(payload, list):
+            return [dict(x) for x in payload if isinstance(x, dict)]
+        return []
+
+    @staticmethod
+    def _has_core_odds(payload: Any) -> bool:
+        for row in HighlightlyClient._payload_rows(payload):
+            for market in row.get("odds") or []:
+                if not isinstance(market, dict):
+                    continue
+                name = normalize_name(str(market.get("market") or market.get("name") or ""))
+                if name in {"full time result", "match result", "1x2", "1 x 2", "3-way moneyline", "3 way moneyline"}:
+                    return True
+                if name.startswith("total goals") or name in {"totals", "match totals", "over under", "over/under", "goals over/under"}:
+                    return True
+        return False
+
+    async def _configured_bookmaker_is_supported(self) -> bool | None:
+        """Check bookmaker catalogue once per run, even under concurrent odds calls."""
+        if self._bookmaker_check_done:
+            return self._bookmaker_supported
+        async with self._bookmaker_check_lock:
+            if self._bookmaker_check_done:
+                return self._bookmaker_supported
+            wanted = self.settings.highlightly_bookmaker.strip()
+            if not wanted:
+                self._bookmaker_supported = False
+                self._bookmaker_check_done = True
+                return False
+            try:
+                payload = await self._get("bookmakers", params={"name": wanted, "limit": 100, "offset": 0})
+                rows = self._payload_rows(payload)
+                target = normalize_name(wanted)
+                self._bookmaker_supported = any(
+                    normalize_name(str(row.get("name") or row.get("bookmakerName") or "")) == target
+                    for row in rows
+                )
+                LOGGER.info("Highlightly bookmaker '%s' supported=%s", wanted, self._bookmaker_supported)
+            except Exception as exc:
+                self._bookmaker_supported = None
+                LOGGER.info("Highlightly bookmaker catalogue unavailable (%s): %s", wanted, exc)
+            self._bookmaker_check_done = True
+            return self._bookmaker_supported
+
+    async def _odds_with_fallback(self, match_id: str, odds_type: str) -> dict[str, Any]:
+        base = {"matchId": match_id, "oddsType": odds_type, "limit": 5}
+        wanted = self.settings.highlightly_bookmaker.strip()
+        supported = await self._configured_bookmaker_is_supported() if wanted else False
+
+        # Prefer the configured bookmaker when Highlightly advertises it, or when
+        # the catalogue check was inconclusive. A 200 response with zero rows is
+        # treated as "no coverage for this match", not as an API failure.
+        if wanted and supported is not False:
+            filtered = await self._get("odds", params={**base, "bookmakerName": wanted})
+            if self._payload_rows(filtered) and self._has_core_odds(filtered):
+                result = dict(filtered or {}) if isinstance(filtered, dict) else {"data": list(filtered or [])}
+                result["_ac10_odds_query"] = {"mode": "preferred_bookmaker", "bookmaker": wanted}
+                return result
+
+        if self.settings.highlightly_odds_fallback_any_bookmaker:
+            unfiltered = await self._get("odds", params=base)
+            result = dict(unfiltered or {}) if isinstance(unfiltered, dict) else {"data": list(unfiltered or [])}
+            result["_ac10_odds_query"] = {
+                "mode": "any_bookmaker_fallback",
+                "bookmaker": wanted or None,
+                "preferred_supported": supported,
+            }
+            return result
+
+        # Fallback disabled: preserve the old strict behaviour.
+        strict = await self._get("odds", params={**base, **({"bookmakerName": wanted} if wanted else {})})
+        result = dict(strict or {}) if isinstance(strict, dict) else {"data": list(strict or [])}
+        result["_ac10_odds_query"] = {"mode": "strict", "bookmaker": wanted or None}
+        return result
+
     async def prematch_odds(self, match_id: str) -> dict[str, Any]:
-        payload = await self._get("odds", params={
-            "matchId": match_id,
-            "bookmakerName": self.settings.highlightly_bookmaker,
-            "oddsType": "prematch",
-            "limit": 5,
-        })
-        return dict(payload or {}) if isinstance(payload, dict) else {"data": list(payload or [])}
+        return await self._odds_with_fallback(match_id, "prematch")
 
     async def live_odds(self, match_id: str) -> dict[str, Any]:
         """Live odds for a shortlisted candidate only. Absence is non-fatal upstream."""
-        payload = await self._get("odds", params={
-            "matchId": match_id,
-            "bookmakerName": self.settings.highlightly_bookmaker,
-            "oddsType": "live",
-            "limit": 5,
-        })
-        return dict(payload or {}) if isinstance(payload, dict) else {"data": list(payload or [])}
+        return await self._odds_with_fallback(match_id, "live")
 
     async def events(self, match_id: str) -> list[dict[str, Any]]:
         payload = await self._get(f"events/{match_id}")

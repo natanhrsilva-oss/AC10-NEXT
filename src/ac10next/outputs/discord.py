@@ -36,11 +36,10 @@ def live_summary(matches: dict[str,MatchRecord], analyses: list[LiveAnalysis], p
 def pre_summary(matches: dict[str,MatchRecord], contexts: list[PregameContext], *, total_prepared: int | None = None, limit: int = 10) -> tuple[str,str] | None:
     # contexts must already be filtered by the PRE Precision layer. If there is
     # no high-confidence candidate, PRE stays silent instead of filling slots.
-    top=sorted(
-        contexts,
-        key=lambda p:(float((p.raw.get("precision") or {}).get("score") or 0),p.confidence,p.selected_index),
-        reverse=True,
-    )[:limit]
+    # The PRE selector already returns a diversity-aware quality ranking. Keep
+    # that order here instead of re-sorting by raw Precision and reintroducing
+    # the market-scale bias we just removed.
+    top=list(contexts[:limit])
     if not top:return None
     prepared=total_prepared if total_prepared is not None else len(contexts)
     lines=[f"🎯 **AC10 PRE — ALTA CONFIANÇA** — {len(top)} recomendação(ões) de {prepared} jogos preparados","" ]
@@ -48,9 +47,15 @@ def pre_summary(matches: dict[str,MatchRecord], contexts: list[PregameContext], 
         m=matches[p.match_id]; precision=dict(p.raw.get("precision") or {})
         odd=precision.get("odd"); ev=precision.get("ev_percent"); score=precision.get("score")
         lines.append(f"✅ **{i}. {m.home_team} x {m.away_team}** | {m.kickoff.strftime('%H:%M')}")
-        price=f"Odd **{float(odd):.2f}**" if odd else "Odd ND"
-        evtxt=f"{float(ev):+.1f}%" if ev is not None else "ND"
-        lines.append(f"**{p.selected_market}** | Prob. **{p.selected_probability:.1f}%** | Índice **{p.selected_index:.1f}** | Precision **{float(score or 0):.1f}** | {price} | EV **{evtxt}**")
+        location = " - ".join(x for x in (str(m.country or "").strip(), str(m.competition or "").strip()) if x) or "Liga ND"
+        detail=f"**({location}) {p.selected_market}** | Prob. **{p.selected_probability:.1f}%** | Índice **{p.selected_index:.1f}** | Precision **{float(score or 0):.1f}**"
+        # Price is informative only. When Highlightly has no usable price, omit
+        # Odd/EV entirely instead of printing ND noise in the Discord message.
+        if odd:
+            detail += f" | Odd **{float(odd):.2f}**"
+            if ev is not None:
+                detail += f" | EV **{float(ev):+.1f}%**"
+        lines.append(detail)
         lines.append("")
     text="\n".join(lines).strip()
     key_obj=[(p.match_id,p.selected_market) for p in top]

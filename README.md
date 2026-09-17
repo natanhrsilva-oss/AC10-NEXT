@@ -1,80 +1,95 @@
-# AC10 Next v0.4.1
+# AC10 Next v0.4.4
 
-Nova geração do AC10, estruturada em **PRE → LIVE → AUDIT**, com Supabase como fonte operacional de verdade.
+Nova geração do AC10 estruturada em **PRE → LIVE → AUDIT**, com Supabase como fonte operacional de verdade, Google Sheets como visualização e Discord como canal de alerta.
 
-## Ajuste v0.4.1
+## v0.4.4
 
-- PRE menos engessado: Precision Score continua seletivo, mas confiança/probabilidade/margem não eliminam isoladamente um bom jogo.
-- PRE mantém odd mínima 1.60 e EV >= 0.
-- LIVE não consulta nem exige odds por padrão: sinal esportivo aprovado vira RECOMENDAÇÃO.
-- Log PRE inclui `pre_funnel` com motivos de rejeição e near misses.
+Esta versão corrige três pontos do PRE:
 
+- **equilíbrio de mercados**: o TOP 10 não é mais ordenado apenas pela escala absoluta de Precision; usa também posição relativa dentro do próprio mercado e um cap suave de 4 recomendações por mercado;
+- **odds resilientes**: Bet365 continua preferida, mas se a Highlightly não devolver preço para ela o robô tenta o mesmo jogo sem filtro de bookmaker e escolhe uma única bookmaker com melhor cobertura;
+- **Discord PRE**: passa a mostrar `(PAÍS - LIGA) MERCADO` e só inclui Odd/EV quando realmente existem.
 
-## O que mudou na v0.4.1
+Não existe cota fixa por mercado. O cap é suave: se não houver mercados alternativos qualificados, as vagas restantes voltam para os sinais esportivos mais fortes.
 
-### PRE de alta confiança
+## PRE
 
-O PRE continua preparando **todos os jogos elegíveis** para o LIVE, mas recomenda ao usuário somente uma camada de alta precisão:
+O PRE prepara todos os jogos elegíveis para servir de contexto ao LIVE, mas recomenda no máximo 10 entradas ao usuário.
 
-- `PRE Precision Score` separado do `Live Readiness`;
-- no máximo **10 recomendações PRE**;
-- pode enviar menos de 10 ou **nenhuma**;
-- exige qualidade, confiança, índice, margem entre mercados, especialista aprovado, odd >= 1,60 e preço coerente;
-- odds PRE são consultadas apenas para a shortlist de até 20 candidatos, reduzindo consumo;
-- recomendações PRE são gravadas em `ac10_recommendations` e auditadas normalmente.
+A recomendação é decidida pela leitura esportiva e pelo `Precision Score`. Odds são **informativas**, não são requisito para aprovar ou reprovar uma entrada. Quando existem, são armazenadas e o EV é calculado; quando não existem, o fluxo segue normalmente.
 
-### LIVE: SINAL → PREÇO → RECOMENDAÇÃO
+O funil de log inclui:
 
-O motor esportivo agora produz `SINAL` quando os critérios estão completos. A entrada só vira `RECOMENDAÇÃO` depois de encontrar preço real aceitável:
+- `qualified_before_limit`
+- `qualified_by_market`
+- `offered_by_market`
+- `market_soft_cap`
+- `market_percentile`
+- `ranking_score`
+- `near_misses`
 
-```text
-sinal esportivo + odd >= 1,60 + EV >= 0 + preço coerente = RECOMENDAÇÃO
+## Odds Highlightly
+
+Fluxo PRE da v0.4.4:
+
+1. Verifica uma vez por execução se `HIGHLIGHTLY_BOOKMAKER` existe no catálogo da Highlightly.
+2. Tenta a bookmaker preferida quando disponível.
+3. Se não vier `Full Time Result` ou `Total Goals` utilizável, repete a consulta do mesmo `matchId` sem `bookmakerName`.
+4. Escolhe uma única bookmaker com melhor cobertura dos mercados suportados.
+5. Nunca mistura preços de bookmakers diferentes na mesma leitura.
+6. Se nenhuma odd existir, segue sem preço.
+
+Configuração:
+
+```env
+HIGHLIGHTLY_BOOKMAKER=Bet365
+HIGHLIGHTLY_ODDS_FALLBACK_ANY_BOOKMAKER=true
 ```
 
-Sem preço, fica `SINAL`; odd baixa/EV negativo bloqueiam a entrada.
+## LIVE
 
-### Pós-gol e mudança de estado
+Por padrão o LIVE decide exclusivamente por dados esportivos:
 
-Quando o placar aumenta entre scans, o AC10 aplica cooldown na chance de outro gol:
+```env
+LIVE_REQUIRE_PRICE_FOR_RECOMMENDATION=false
+```
 
-- 0–2 min: fator 0,75 e bloqueio de novo sinal de gol;
-- 3–5 min: fator 0,85;
-- 6–8 min: fator 0,92;
-- 9–10 min: fator 0,96;
-- depois de 10 min: normal.
+Portanto odd/EV não bloqueiam recomendação LIVE.
 
-Cartão vermelho novo também cria uma curta janela de reconstrução do estado do jogo.
+Janelas principais:
 
-### Proteção contra dados estagnados
+- 10–37: `GOL HT` / gol direcional;
+- 38–65: BACK;
+- 66–88: `OVER +1 GOL`, com direcional quando houver dominância clara.
 
-Se o minuto avança mas as principais estatísticas permanecem idênticas por scans sucessivos, a qualidade é reduzida. A partir do segundo scan estagnado, um novo `SINAL` é bloqueado até chegar dado fresco.
+O motor também preserva cooldown pós-gol, tratamento de cartão vermelho, proteção contra dados estagnados, momentum, GPI, IDD, pressão recente, chance de gol em 10 minutos e probabilidade de +1,5 gols.
+
+## Discord PRE
+
+Exemplo sem odd:
+
+```text
+✅ 1. Bolívar x Gualberto Villarroel SJ | 21:30
+(Bolivia - División Profesional) BACK CASA | Prob. 93.1% | Índice 94.1 | Precision 93.8
+```
+
+Exemplo com odd:
+
+```text
+✅ 1. Bolívar x Gualberto Villarroel SJ | 21:30
+(Bolivia - División Profesional) BACK CASA | Prob. 93.1% | Índice 94.1 | Precision 93.8 | Odd 1.72 | EV +6.4%
+```
 
 ## Google Sheets
 
-A planilha passa a ter quatro abas:
+Abas operacionais:
 
-- `AC10 PRE` — panorama completo do dia;
-- `AC10 LIVE` — estado atual;
-- `HISTÓRICO PRE` — recomendações PRE, resultado e P/L;
-- `HISTÓRICO LIVE` — recomendações LIVE, resultado e P/L.
+- `AC10 PRE`
+- `AC10 LIVE`
+- `HISTÓRICO PRE`
+- `HISTÓRICO LIVE`
 
-No LIVE:
-
-- linhas alternadas em azul claro / azul mais escuro;
-- métricas >55 em verde;
-- 45–55 em amarelo;
-- <45 em vermelho;
-- linha inteira verde somente quando `Status = RECOMENDAÇÃO`.
-
-Os históricos fazem upsert pelo UUID da recomendação e o AUDIT atualiza `GREEN`, `RED` e P/L.
-
-> Após atualizar `google-apps-script/Code.gs`, é obrigatório publicar uma **nova versão do Web App** no Apps Script. A URL pode permanecer a mesma.
-
-## Janelas LIVE
-
-- 10–37: `GOL HT` / gol direcional;
-- 38–65: **BACK ONLY**;
-- 66–88: `OVER +1 GOL`, com gol direcional apenas quando há dominância clara.
+No LIVE, as métricas usam a regra visual já definida: >55 verde, 45–55 amarelo, <45 vermelho; a linha inteira fica verde somente em `RECOMENDAÇÃO`.
 
 ## GitHub Actions
 
@@ -85,13 +100,21 @@ Os históricos fazem upsert pelo UUID da recomendação e o AUDIT atualiza `GREE
 - `40 - Health`
 - `90 - Tests`
 
-## Ordem recomendada após instalar a v0.4.1
+## Instalação do v0.4.4
 
-1. Atualize o repositório.
-2. Atualize e redeploy o `google-apps-script/Code.gs`.
-3. Rode `90 - Tests`.
-4. Rode `10 - AC10 PRE` manualmente.
-5. Aguarde pelo menos dois scans LIVE para reconstruir momentum na nova versão.
-6. Rode `20 - AC10 LIVE` normalmente.
+Não há migration SQL nem alteração obrigatória no Apps Script nesta versão.
 
-Não há migration SQL obrigatória nesta versão; as tabelas atuais já suportam os novos dados via `raw/payload` e `ac10_recommendations`.
+Ordem recomendada:
+
+1. Suba os arquivos do FIX ou substitua pelo pacote FULL.
+2. Rode `90 - Tests`.
+3. Rode `10 - AC10 PRE`.
+4. Confira no log `offered_by_market` e, para odds, `Highlightly bookmaker` / `Odds pré fallback`.
+5. Rode o LIVE normalmente.
+
+## Versões
+
+- PRE: `AC10-NEXT-PRE-0.4.4`
+- LIVE: `AC10-NEXT-LIVE-0.4.4`
+- Calibration: `AC10-NEXT-CAL-0.4.4`
+- pacote Python: `0.4.4`

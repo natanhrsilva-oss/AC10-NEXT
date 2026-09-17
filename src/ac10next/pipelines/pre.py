@@ -17,7 +17,7 @@ from ac10next.engines.pregame.strategies import evaluate_all
 from ac10next.filters import exclusion_reason
 from ac10next.outputs import discord, sheets
 from ac10next.providers.highlightly import HighlightlyClient
-from ac10next.providers.parsers import extract_highlightly_main_odds, highlightly_odds_diagnostics, match_record
+from ac10next.providers.parsers import extract_highlightly_best_main_odds, highlightly_odds_diagnostics, match_record
 from ac10next.repositories.database import Database
 from ac10next.settings import Settings
 
@@ -81,18 +81,24 @@ class PregameBuilder:
             async def odds_one(c:PregameContext):
                 try:
                     payload = await self.provider.prematch_odds(c.match_id)
-                    parsed = extract_highlightly_main_odds(payload, self.settings.highlightly_bookmaker)
-                    if not any(float(v or 0) > 1 for v in parsed.values()):
-                        LOGGER.info("Odds pré sem mercado utilizável %s: %s", c.match_id, highlightly_odds_diagnostics(payload, self.settings.highlightly_bookmaker))
-                    return c.match_id, parsed
+                    parsed, bookmaker = extract_highlightly_best_main_odds(payload, self.settings.highlightly_bookmaker)
+                    diag = highlightly_odds_diagnostics(payload, self.settings.highlightly_bookmaker)
+                    if not any(float(parsed.get(k) or 0) > 1 for k in ("home", "draw", "away", "over25")):
+                        LOGGER.info("Odds pré sem mercado utilizável %s: %s", c.match_id, diag)
+                    elif bookmaker and bookmaker != self.settings.highlightly_bookmaker:
+                        LOGGER.info("Odds pré fallback %s: bookmaker=%s query=%s", c.match_id, bookmaker, diag.get("query_mode"))
+                    return c.match_id, {"odds": parsed, "bookmaker": bookmaker, "diagnostics": diag}
                 except Exception as exc:
-                    LOGGER.info("Odds pré indisponíveis %s: %s",c.match_id,exc); return c.match_id,{}
+                    LOGGER.info("Odds pré indisponíveis %s: %s",c.match_id,exc); return c.match_id,{"odds": {}, "bookmaker": None}
             odds=dict(await asyncio.gather(*(odds_one(c) for c in shortlist))) if shortlist else {}
             rebuilt=[]
             for c in contexts:
-                f=features[c.match_id]; o=odds.get(c.match_id) or {}
-                if o:
+                f=features[c.match_id]; bundle=odds.get(c.match_id) or {}; o=bundle.get("odds") or {}
+                if any(float(o.get(k) or 0) > 1 for k in ("home", "draw", "away", "over25")):
                     f.home_odd=float(o.get("home") or 0); f.draw_odd=float(o.get("draw") or 0); f.away_odd=float(o.get("away") or 0); f.over25_odd=float(o.get("over25") or 0)
+                    f.raw["odds_provider"]="Highlightly"
+                    f.raw["odds_bookmaker"]=bundle.get("bookmaker")
+                    f.raw["odds_query_mode"]=(bundle.get("diagnostics") or {}).get("query_mode")
                     c=build_context(f,evaluate_all(f),self.settings.pre_model_version)
                 rebuilt.append(c)
             contexts=rebuilt
