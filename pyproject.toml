@@ -4,7 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ac10-next"
-version = "0.1.0"
+version = "0.3.1"
+description = "AC10 Next - PRE -> LIVE -> AUDIT football intelligence pipeline"
+readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "httpx>=0.28,<1",
@@ -18,6 +20,20 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8,<9", "pytest-asyncio>=0.25,<1", "ruff>=0.9,<1"]
 
+[project.scripts]
+ac10-next = "ac10next.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 180
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]

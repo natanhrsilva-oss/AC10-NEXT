@@ -1,0 +1,50 @@
+name: "20 - AC10 LIVE"
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Forçar coleta mesmo fora da janela/frequência"
+        required: false
+        default: true
+        type: boolean
+  schedule:
+    # 06:00–23:59 em America/Sao_Paulo. O código também valida a janela local.
+    - cron: "*/5 0-2,9-23 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ac10-live
+  cancel-in-progress: false
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+      HIGHLIGHTLY_API_KEY: ${{ secrets.HIGHLIGHTLY_API_KEY }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      GOOGLE_SHEETS_WEBAPP_URL: ${{ secrets.GOOGLE_SHEETS_WEBAPP_URL }}
+      GOOGLE_SHEETS_TOKEN: ${{ secrets.GOOGLE_SHEETS_TOKEN }}
+      APP_TIMEZONE: America/Sao_Paulo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+      - name: Run LIVE
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force }}" = "true" ]; then
+            ac10-next live --force
+          else
+            ac10-next live
+          fi

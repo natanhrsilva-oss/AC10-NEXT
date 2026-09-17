@@ -1,0 +1,47 @@
+name: "30 - AC10 AUDIT"
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Data opcional YYYY-MM-DD"
+        required: false
+        type: string
+  schedule:
+    # 03:20 em America/Sao_Paulo; por padrão audita o dia anterior.
+    - cron: "20 6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ac10-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+      HIGHLIGHTLY_API_KEY: ${{ secrets.HIGHLIGHTLY_API_KEY }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      APP_TIMEZONE: America/Sao_Paulo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+      - name: Run AUDIT
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.date }}" ]; then
+            ac10-next audit --date "${{ inputs.date }}"
+          else
+            ac10-next audit
+          fi

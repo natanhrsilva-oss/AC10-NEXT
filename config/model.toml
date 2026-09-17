@@ -1,7 +1,7 @@
 [versions]
-pre_model = "AC10-NEXT-PRE-0.1.0"
-live_model = "AC10-NEXT-LIVE-0.1.0"
-calibration = "AC10-NEXT-CAL-0.1.0"
+pre_model = "AC10-NEXT-PRE-0.3.1"
+live_model = "AC10-NEXT-LIVE-0.3.1"
+calibration = "AC10-NEXT-CAL-0.3.1"
 schema = "1"
 
 [pregame]

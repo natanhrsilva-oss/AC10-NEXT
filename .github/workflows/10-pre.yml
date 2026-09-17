@@ -1,0 +1,49 @@
+name: "10 - AC10 PRE"
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Data opcional YYYY-MM-DD"
+        required: false
+        type: string
+  schedule:
+    # Brasil (America/Sao_Paulo): 06:05, 10:05, 14:05 e 18:05
+    - cron: "5 9,13,17,21 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ac10-pre
+  cancel-in-progress: false
+
+jobs:
+  pre:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+      HIGHLIGHTLY_API_KEY: ${{ secrets.HIGHLIGHTLY_API_KEY }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      GOOGLE_SHEETS_WEBAPP_URL: ${{ secrets.GOOGLE_SHEETS_WEBAPP_URL }}
+      GOOGLE_SHEETS_TOKEN: ${{ secrets.GOOGLE_SHEETS_TOKEN }}
+      APP_TIMEZONE: America/Sao_Paulo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+      - name: Run PRE
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.date }}" ]; then
+            ac10-next pre --date "${{ inputs.date }}"
+          else
+            ac10-next pre
+          fi
