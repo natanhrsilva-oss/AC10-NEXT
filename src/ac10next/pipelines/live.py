@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 from ac10next.domain.mappers import pregame_from_row
 from ac10next.domain.models import LiveInput, MatchRecord, PregameContext
 from ac10next.engines.live.engine import analyze
-from ac10next.engines.live.pricing import apply_price
+from ac10next.engines.live.pricing import apply_no_price_requirement, apply_price
 from ac10next.filters import exclusion_reason
 from ac10next.outputs import discord, sheets
 from ac10next.pipelines.pre import PregameBuilder
@@ -79,28 +79,34 @@ async def run_live(settings: Settings, *, force: bool = False) -> dict:
                 inp=LiveInput(match=m,pre=pre[m.match_id],stats=stats[m.match_id],captured_at=now_utc)
                 analyses.append(analyze(inp,latest_due.get(m.match_id),history.get(m.match_id,[])))
 
-            # Odds live are intentionally fetched only after the sporting engine
-            # has produced genuine recommendation candidates. This keeps the
-            # expensive/slow odds endpoint out of the normal scan path.
-            price_candidates=sorted(
-                [a for a in analyses if a.status=="SINAL"],
-                key=lambda a:(a.market_index,a.confirmation_count,a.selected_probability),
-                reverse=True,
-            )[:settings.live_max_odds_requests_per_run]
-            async def price_one(a):
-                try:
-                    payload=await provider.live_odds(a.match_id)
-                    odd=extract_highlightly_live_market_odd(
-                        payload,a.selected_market,a.home_score,a.away_score,settings.highlightly_bookmaker
-                    )
-                    return a.match_id,odd
-                except Exception as exc:
-                    LOGGER.info("Odds live indisponíveis %s (%s): %s",a.match_id,a.selected_market,exc)
-                    return a.match_id,0.0
-            live_prices=dict(await asyncio.gather(*(price_one(a) for a in price_candidates))) if price_candidates else {}
-            for a in analyses:
-                if a.match_id in live_prices:
-                    apply_price(a,float(live_prices[a.match_id] or 0),settings)
+            # Por padrão o LIVE decide exclusivamente por dados esportivos.
+            # Odds ficam opcionais e não bloqueiam nem alteram a recomendação.
+            sporting_candidates_count=sum(a.status=="SINAL" for a in analyses)
+            price_candidates=[]
+            if settings.live_require_price_for_recommendation:
+                price_candidates=sorted(
+                    [a for a in analyses if a.status=="SINAL"],
+                    key=lambda a:(a.market_index,a.confirmation_count,a.selected_probability),
+                    reverse=True,
+                )[:settings.live_max_odds_requests_per_run]
+                async def price_one(a):
+                    try:
+                        payload=await provider.live_odds(a.match_id)
+                        odd=extract_highlightly_live_market_odd(
+                            payload,a.selected_market,a.home_score,a.away_score,settings.highlightly_bookmaker
+                        )
+                        return a.match_id,odd
+                    except Exception as exc:
+                        LOGGER.info("Odds live indisponíveis %s (%s): %s",a.match_id,a.selected_market,exc)
+                        return a.match_id,0.0
+                live_prices=dict(await asyncio.gather(*(price_one(a) for a in price_candidates))) if price_candidates else {}
+                for a in analyses:
+                    if a.match_id in live_prices:
+                        apply_price(a,float(live_prices[a.match_id] or 0),settings)
+            else:
+                for a in analyses:
+                    if a.status=="SINAL":
+                        apply_no_price_requirement(a)
 
             await db.upsert_live_latest(analyses,settings.live_model_version); await db.insert_snapshots(analyses,settings.live_model_version)
             rec_count=await db.insert_recommendations(analyses,live_model_version=settings.live_model_version,pre_model_version=settings.pre_model_version,calibration_version=settings.calibration_version)
@@ -119,7 +125,7 @@ async def run_live(settings: Settings, *, force: bool = False) -> dict:
                         try:await discord.send(settings.discord_webhook_url,text); await db.mark_notification(key,sent=True)
                         except Exception as exc:await db.mark_notification(key,sent=False,error=str(exc)); output_errors.append(f"discord:{exc}")
             await db.upsert_api_usage("highlightly","LIVE",provider.usage())
-            metrics={"active":len(live_records),"due":len(due),"processed":len(analyses),"above_55":sum(a.market_index>=settings.live_summary_min_index for a in analyses),"sporting_candidates":len(price_candidates),"signals_unpriced":sum(a.status=="SINAL" for a in analyses),"recommendations":sum(a.status=="RECOMENDAÇÃO" for a in analyses),"new_recommendations":rec_count,"odds_candidates":len(price_candidates),"priced":sum(a.market_odd is not None for a in analyses),"post_goal_cooldowns":sum(bool((a.raw.get("event_state") or {}).get("post_goal_active")) for a in analyses),"stale_blocks":sum(bool((a.raw.get("data_freshness") or {}).get("stale_block")) for a in analyses),"emergency_pre":emergency,"output_errors":output_errors,"api":provider.usage()}
+            metrics={"active":len(live_records),"due":len(due),"processed":len(analyses),"above_55":sum(a.market_index>=settings.live_summary_min_index for a in analyses),"sporting_candidates":sporting_candidates_count,"signals_unpriced":sum(a.status=="SINAL" for a in analyses),"recommendations":sum(a.status=="RECOMENDAÇÃO" for a in analyses),"new_recommendations":rec_count,"price_mode":"REQUIRED" if settings.live_require_price_for_recommendation else "IGNORED","odds_candidates":len(price_candidates),"priced":sum(a.market_odd is not None for a in analyses),"post_goal_cooldowns":sum(bool((a.raw.get("event_state") or {}).get("post_goal_active")) for a in analyses),"stale_blocks":sum(bool((a.raw.get("data_freshness") or {}).get("stale_block")) for a in analyses),"emergency_pre":emergency,"output_errors":output_errors,"api":provider.usage()}
             await db.finish_run(run_id,status="SUCCESS",duration_ms=int((time.perf_counter()-started)*1000),metrics=metrics); return metrics
         except Exception as exc:
             await db.upsert_api_usage("highlightly","LIVE",provider.usage()); await db.finish_run(run_id,status="ERROR",duration_ms=int((time.perf_counter()-started)*1000),metrics={"api":provider.usage()},error={"type":type(exc).__name__,"message":str(exc)}); raise

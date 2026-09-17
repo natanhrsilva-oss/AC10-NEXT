@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ac10-next"
-version = "0.4.0"
+version = "0.4.1"
 description = "AC10 Next - PRE -> LIVE -> AUDIT football intelligence pipeline"
 readme = "README.md"
 requires-python = ">=3.12"

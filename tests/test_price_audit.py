@@ -1,5 +1,5 @@
 from ac10next.engines.audit import evaluate_recommendation
-from ac10next.engines.live.pricing import apply_price
+from ac10next.engines.live.pricing import apply_no_price_requirement, apply_price
 from ac10next.settings import Settings
 
 from conftest import make_analysis
@@ -39,3 +39,18 @@ def test_unpriced_signal_does_not_invent_profit():
     assert result == "GREEN"
     assert pnl == 0.0
     assert detail["pnl_priced"] is False
+
+
+def test_live_default_does_not_require_odd():
+    s = Settings(_env_file=None)
+    assert s.live_require_price_for_recommendation is False
+
+
+def test_live_signal_promotes_without_odd():
+    a = make_analysis(index=72, status="SINAL")
+    apply_no_price_requirement(a)
+    assert a.status == "RECOMENDAÇÃO"
+    assert a.market_odd is None
+    assert a.ev_percent is None
+    assert a.price_status == "ODD NÃO EXIGIDA"
+    assert a.raw["price"]["required"] is False

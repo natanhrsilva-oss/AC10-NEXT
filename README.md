@@ -1,8 +1,16 @@
-# AC10 Next v0.4.0
+# AC10 Next v0.4.1
 
 Nova geração do AC10, estruturada em **PRE → LIVE → AUDIT**, com Supabase como fonte operacional de verdade.
 
-## O que mudou na v0.4.0
+## Ajuste v0.4.1
+
+- PRE menos engessado: Precision Score continua seletivo, mas confiança/probabilidade/margem não eliminam isoladamente um bom jogo.
+- PRE mantém odd mínima 1.60 e EV >= 0.
+- LIVE não consulta nem exige odds por padrão: sinal esportivo aprovado vira RECOMENDAÇÃO.
+- Log PRE inclui `pre_funnel` com motivos de rejeição e near misses.
+
+
+## O que mudou na v0.4.1
 
 ### PRE de alta confiança
 
@@ -77,7 +85,7 @@ Os históricos fazem upsert pelo UUID da recomendação e o AUDIT atualiza `GREE
 - `40 - Health`
 - `90 - Tests`
 
-## Ordem recomendada após instalar a v0.4.0
+## Ordem recomendada após instalar a v0.4.1
 
 1. Atualize o repositório.
 2. Atualize e redeploy o `google-apps-script/Code.gs`.

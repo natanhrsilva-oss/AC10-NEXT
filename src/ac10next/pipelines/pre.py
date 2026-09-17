@@ -12,7 +12,7 @@ from ac10next.domain.mappers import team_profile_from_row
 from ac10next.domain.models import MatchRecord, PregameContext, TeamProfile
 from ac10next.engines.pregame.meta import build_context
 from ac10next.engines.pregame.profiles import build_features, make_team_profile
-from ac10next.engines.pregame.precision import decorate_precision, precision_score, select_pre_recommendations
+from ac10next.engines.pregame.precision import decorate_precision, precision_score, select_pre_recommendations, selection_diagnostics
 from ac10next.engines.pregame.strategies import evaluate_all
 from ac10next.filters import exclusion_reason
 from ac10next.outputs import discord, sheets
@@ -117,6 +117,8 @@ async def run_pre(settings: Settings, target_date: str | None = None) -> dict:
             # from Live Readiness. All contexts still feed LIVE; only the strongest
             # priced candidates are offered as standalone PRE recommendations.
             pre_recommendations=select_pre_recommendations(contexts,settings)
+            pre_funnel=selection_diagnostics(contexts,settings)
+            LOGGER.info("PRE recommendation funnel: %s", pre_funnel)
             new_pre_recommendations=await db.insert_pre_recommendations(
                 pre_recommendations,
                 pre_model_version=settings.pre_model_version,
@@ -139,7 +141,7 @@ async def run_pre(settings: Settings, target_date: str | None = None) -> dict:
                         try:await discord.send(settings.discord_webhook_url,text); await db.mark_notification(key,sent=True)
                         except Exception as exc:await db.mark_notification(key,sent=False,error=str(exc)); output_errors.append(f"discord:{exc}")
             await db.upsert_api_usage("highlightly","PRE",provider.usage())
-            metrics={"matches_found":len(records),"eligible":len(eligible),"contexts":len(contexts),"priority_A":sum(c.live_priority=="A" for c in contexts),"priority_B":sum(c.live_priority=="B" for c in contexts),"pre_recommendations":len(pre_recommendations),"new_pre_recommendations":new_pre_recommendations,"output_errors":output_errors,"api":provider.usage()}
+            metrics={"matches_found":len(records),"eligible":len(eligible),"contexts":len(contexts),"priority_A":sum(c.live_priority=="A" for c in contexts),"priority_B":sum(c.live_priority=="B" for c in contexts),"pre_recommendations":len(pre_recommendations),"new_pre_recommendations":new_pre_recommendations,"pre_funnel":pre_funnel,"output_errors":output_errors,"api":provider.usage()}
             await db.finish_run(run_id,status="SUCCESS",duration_ms=int((time.perf_counter()-started)*1000),metrics=metrics)
             return metrics
         except Exception as exc:

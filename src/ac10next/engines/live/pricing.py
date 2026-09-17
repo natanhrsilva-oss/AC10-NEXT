@@ -7,16 +7,28 @@ from ac10next.settings import Settings
 from ac10next.utils import ev_percent
 
 
-def apply_price(analysis: LiveAnalysis, odd: float, settings: Settings) -> None:
-    """Final market guard.
+def apply_no_price_requirement(analysis: LiveAnalysis) -> None:
+    """Promove um sinal esportivo LIVE sem consultar/usar odds.
 
-    LIVE now separates sporting approval (SINAL) from an offered entry
-    (RECOMENDAÇÃO). A signal is promoted only when a real market price is found
-    and it passes minimum odd, EV and model/market consistency checks.
+    Na v0.4.1 a decisão LIVE é exclusivamente esportiva por padrão. O preço pode
+    continuar existindo como recurso opcional, mas não é necessário para liberar
+    a recomendação.
     """
+    if analysis.status == "SINAL":
+        analysis.status = "RECOMENDAÇÃO"
+    analysis.market_odd = None
+    analysis.ev_percent = None
+    analysis.price_status = "ODD NÃO EXIGIDA"
+    analysis.raw["price"] = {"required": False, "status": analysis.price_status}
+    analysis.fingerprint = hashlib.sha1(
+        f"{analysis.fingerprint}|{analysis.status}|NO_PRICE_REQUIRED".encode()
+    ).hexdigest()[:20]
+
+
+def apply_price(analysis: LiveAnalysis, odd: float, settings: Settings) -> None:
+    """Guarda final opcional de mercado quando preço é exigido por configuração."""
     if not odd or odd <= 1.0:
         analysis.price_status = "SEM PREÇO LIVE"
-        # Never label an unpriced sporting signal as an offered recommendation.
         if analysis.status == "RECOMENDAÇÃO":
             analysis.status = "SINAL"
         analysis.raw["price"] = {"status": analysis.price_status, "required": True}
