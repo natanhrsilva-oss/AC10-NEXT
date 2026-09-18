@@ -3,8 +3,10 @@ from __future__ import annotations
 import math
 import re
 import unicodedata
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
+from uuid import UUID
 
 
 def number(value: Any, default: float = 0.0) -> float:
@@ -61,3 +63,22 @@ def parse_iso(value: Any) -> datetime | None:
         return datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+def json_safe(value: Any) -> Any:
+    """Recursively convert common DB/Python values to JSON-serializable primitives.
+
+    PostgreSQL NUMERIC columns are returned by psycopg as Decimal.  JSON payloads
+    stored through psycopg Jsonb must not receive Decimal directly.
+    """
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [json_safe(v) for v in value]
+    return value
+

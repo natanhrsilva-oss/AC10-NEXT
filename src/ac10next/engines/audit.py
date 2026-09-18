@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 
-def _profit(won: bool, odd: float | None) -> float:
-    # Never invent P/L for an unpriced signal.
-    if not odd or odd <= 1:
+def _optional_float(value) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _profit(won: bool, odd) -> float:
+    # Never invent P/L for an unpriced signal. PostgreSQL NUMERIC arrives as Decimal.
+    price = _optional_float(odd)
+    if price is None or price <= 1.0:
         return 0.0
-    return odd - 1 if won else -1.0
+    return float(price - 1.0) if won else -1.0
 
 
 def evaluate_recommendation(
@@ -41,12 +51,13 @@ def evaluate_recommendation(
         return "N/A", 0.0, {}
 
     result = "GREEN" if won else "RED"
+    market_odd = _optional_float(rec.get("market_odd"))
     detail = {
         "final": f"{final_h}-{final_a}",
         "entry": f"{eh}-{ea}",
-        "market_odd": rec.get("market_odd"),
-        "pnl_priced": bool(rec.get("market_odd")),
+        "market_odd": market_odd,
+        "pnl_priced": bool(market_odd and market_odd > 1.0),
     }
     if ht_goals is not None:
         detail["ht_goals"] = ht_goals
-    return result, _profit(bool(won), rec.get("market_odd")), detail
+    return result, _profit(bool(won), market_odd), detail

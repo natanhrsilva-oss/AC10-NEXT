@@ -8,6 +8,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
 from ac10next.domain.models import LiveAnalysis, MatchRecord, PregameContext, TeamProfile
+from ac10next.utils import json_safe
 
 
 class Database:
@@ -276,5 +277,5 @@ class Database:
 
     async def insert_audit(self, recommendation_id: str, result: str, profit_units: float, payload: dict[str,Any]) -> None:
         async with self.pool.connection() as conn:
-            await conn.execute("insert into ac10_audits(recommendation_id,result,profit_units,payload) values(%s,%s,%s,%s) on conflict(recommendation_id) do nothing",(recommendation_id,result,profit_units,Jsonb(payload)))
+            await conn.execute("insert into ac10_audits(recommendation_id,result,profit_units,payload) values(%s,%s,%s,%s) on conflict(recommendation_id) do nothing",(recommendation_id,result,float(profit_units),Jsonb(json_safe(payload))))
             await conn.commit()

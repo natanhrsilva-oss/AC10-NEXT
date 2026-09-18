@@ -1,6 +1,15 @@
-# AC10 Next v0.4.4
+# AC10 Next v0.4.5
 
 Nova geração do AC10 estruturada em **PRE → LIVE → AUDIT**, com Supabase como fonte operacional de verdade, Google Sheets como visualização e Discord como canal de alerta.
+
+
+## v0.4.5 — correção do AUDIT
+
+- Corrige `TypeError: Object of type Decimal is not JSON serializable` no workflow AUDIT.
+- Odds vindas de colunas PostgreSQL `NUMERIC` são normalizadas para `float` antes de entrar no JSON de auditoria.
+- Adiciona `json_safe()` como proteção recursiva para payloads JSON.
+- Nenhuma migration SQL ou alteração no Apps Script.
+- Os motores PRE/LIVE/CAL permanecem em `0.4.4`, pois a lógica de previsão não mudou.
 
 ## v0.4.4
 
@@ -117,4 +126,4 @@ Ordem recomendada:
 - PRE: `AC10-NEXT-PRE-0.4.4`
 - LIVE: `AC10-NEXT-LIVE-0.4.4`
 - Calibration: `AC10-NEXT-CAL-0.4.4`
-- pacote Python: `0.4.4`
+- pacote Python: `0.4.5`
