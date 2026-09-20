@@ -109,7 +109,10 @@ async def run_live(settings: Settings, *, force: bool = False) -> dict:
                         apply_no_price_requirement(a)
 
             await db.upsert_live_latest(analyses,settings.live_model_version); await db.insert_snapshots(analyses,settings.live_model_version)
-            rec_count=await db.insert_recommendations(analyses,live_model_version=settings.live_model_version,pre_model_version=settings.pre_model_version,calibration_version=settings.calibration_version)
+            # Half-time remains visible in the sheet as INTERVALO, but it can never
+            # create a recommendation/audit entry or be sent to Discord.
+            recommendation_analyses=[a for a in analyses if normalize_state(a.state)!="half time"]
+            rec_count=await db.insert_recommendations(recommendation_analyses,live_model_version=settings.live_model_version,pre_model_version=settings.pre_model_version,calibration_version=settings.calibration_version)
             match_map={m.match_id:m for m in due}; pre_due={m.match_id:pre[m.match_id] for m in due}; output_errors=[]
             if settings.sheets_enabled and settings.google_sheets_webapp_url and settings.google_sheets_token:
                 try:

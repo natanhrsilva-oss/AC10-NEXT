@@ -153,7 +153,7 @@ function formatSheet_(sh, headers, rowCount, type) {
   const statusIdx = headers.indexOf('Status');
   const resultIdx = headers.indexOf('Resultado');
   const metricNames = type === 'live'
-    ? ['Índice','Probabilidade %','GPI','IDD Casa','IDD Visitante','Chance Gol 10 min %','Over +1,5 Gols a Mais %','Qualidade Mercado %','Probabilidade Pré %']
+    ? ['Índice','Probabilidade %','Momentum Jogo','GPI','IDD Casa','IDD Visitante','Chance Gol 10 min %','Over +1,5 Gols a Mais %','Qualidade Mercado %','Probabilidade Pré %']
     : type === 'pre'
       ? ['Precision Score','Probabilidade Pré %','Índice Pré','Confiança','Qualidade Dados','Perfil Gols','Explosivo','Readiness']
       : ['Probabilidade %','Índice','Confiança','Precision Score','Chance Gol 10 min %','Over +1,5 Gols a Mais %','Qualidade Mercado %'];
@@ -176,11 +176,33 @@ function formatSheet_(sh, headers, rowCount, type) {
       }
     });
 
-    // An actual offered entry always wins over metric colors.
-    if (status === 'RECOMENDAÇÃO') {
+    // An actual offered entry wins over the normal metric colors.
+    if (status === 'ENTRAR') {
       for (let c = 0; c < colCount; c++) {
         rowBg[c] = AC10_COLORS.recommendation;
         rowWeight[c] = 'bold';
+      }
+    }
+
+    // Momentum Casa/Visitante has its own visual rule and is applied last:
+    // difference >15 -> leader green / trailing side red; otherwise both blue.
+    const momentumHomeIdx = headers.indexOf('Momentum Casa');
+    const momentumAwayIdx = headers.indexOf('Momentum Visitante');
+    if (momentumHomeIdx >= 0 && momentumAwayIdx >= 0) {
+      const mh = Number(values[r][momentumHomeIdx]);
+      const ma = Number(values[r][momentumAwayIdx]);
+      rowBg[momentumHomeIdx] = base;
+      rowBg[momentumAwayIdx] = base;
+      if (!isNaN(mh) && !isNaN(ma) && Math.abs(mh - ma) > 15) {
+        if (mh > ma) {
+          rowBg[momentumHomeIdx] = AC10_COLORS.green;
+          rowBg[momentumAwayIdx] = AC10_COLORS.red;
+        } else {
+          rowBg[momentumAwayIdx] = AC10_COLORS.green;
+          rowBg[momentumHomeIdx] = AC10_COLORS.red;
+        }
+        rowWeight[momentumHomeIdx] = 'bold';
+        rowWeight[momentumAwayIdx] = 'bold';
       }
     }
 

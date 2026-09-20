@@ -71,7 +71,7 @@ async def _async_main(args: argparse.Namespace) -> dict:
         return await _health(settings)
     _validate_core(settings)
     if args.command == "pre":
-        return await run_pre(settings, target_date=args.date)
+        return await run_pre(settings, target_date=args.date, skip_if_success=args.if_missing)
     if args.command == "live":
         return await run_live(settings, force=args.force)
     if args.command == "audit":
@@ -89,6 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     pre = sub.add_parser("pre", help="Executa o AC10 PRE")
     pre.add_argument("--date", help="Data YYYY-MM-DD. Padrão: hoje em America/Sao_Paulo")
+    pre.add_argument("--if-missing", action="store_true", help="Executa somente se não houver PRE SUCCESS para a data")
 
     live = sub.add_parser("live", help="Executa o AC10 LIVE")
     live.add_argument("--force", action="store_true", help="Ignora janela operacional e controle de frequência")

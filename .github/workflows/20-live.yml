@@ -9,8 +9,8 @@ on:
         default: true
         type: boolean
   schedule:
-    # 06:00–23:59 em America/Sao_Paulo. O código também valida a janela local.
-    - cron: "*/5 0-2,9-23 * * *"
+    # 06:15/06:30 até 23:15/23:30 em America/Sao_Paulo.
+    - cron: "15,30 0-2,9-23 * * *"
 
 permissions:
   contents: read

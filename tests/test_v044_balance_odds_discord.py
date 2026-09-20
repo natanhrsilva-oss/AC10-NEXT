@@ -115,7 +115,8 @@ def test_pre_discord_has_country_league_and_omits_nd_price_fields():
     result = pre_summary({"m1": m}, [c], total_prepared=98, limit=10)
     assert result is not None
     _, text = result
-    assert "(Brazil - Serie A) BACK CASA" in text
+    assert "**(Brazil - Serie A)**" in text
+    assert "**BACK CASA**" in text
     assert "Odd ND" not in text
     assert "EV **ND**" not in text
 
@@ -163,3 +164,35 @@ def test_highlightly_client_uses_unfiltered_fallback_when_bet365_not_supported(m
     odds_calls = [params for endpoint, params in calls if endpoint == "odds"]
     assert len(odds_calls) == 1
     assert "bookmakerName" not in odds_calls[0]
+
+
+def test_pre_discord_uses_score_out_of_ten_and_market_icon():
+    c = make_pre()
+    c.raw["precision"] = {"score": 84.0, "odd": 1.85, "ev_percent": 7.2}
+    m = make_match()
+    result = pre_summary({"m1": m}, [c], total_prepared=50, limit=10)
+    assert result is not None
+    _, text = result
+    assert "🏠" in text
+    assert "**8.4/10**" in text
+    assert "Odd **1.85**" in text
+    assert "EV **+7.2%**" in text
+
+
+def test_pre_discord_top10_stays_below_safe_discord_limit_with_long_names():
+    contexts=[]
+    matches={}
+    base=make_pre()
+    base_match=make_match()
+    from copy import deepcopy
+    from datetime import timedelta
+    for i in range(10):
+        c=deepcopy(base); c.match_id=f"m{i}"; c.raw["precision"]={"score":90-i,"odd":1.85,"ev_percent":8.2}
+        m=deepcopy(base_match); m.match_id=f"m{i}"; m.home_team="Mandante com um nome extremamente comprido numero "+str(i); m.away_team="Visitante com um nome extremamente comprido numero "+str(i); m.competition="Campeonato Internacional de Nome Muito Comprido"; m.kickoff=base_match.kickoff+timedelta(minutes=i*20)
+        contexts.append(c); matches[m.match_id]=m
+    result=pre_summary(matches,contexts,total_prepared=120,limit=10)
+    assert result is not None
+    _, text=result
+    assert len(text) <= 1950
+    assert "10." in text
+    assert text.endswith("──────────")

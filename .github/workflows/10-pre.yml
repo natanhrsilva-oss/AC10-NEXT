@@ -8,8 +8,9 @@ on:
         required: false
         type: string
   schedule:
-    # Brasil (America/Sao_Paulo): 06:05, 10:05, 14:05 e 18:05
-    - cron: "5 9,13,17,21 * * *"
+    # Brasilia (America/Sao_Paulo): 06:00 execução principal; 06:30 checagem de segurança.
+    - cron: "0 9 * * *"
+    - cron: "30 9 * * *"
 
 permissions:
   contents: read
@@ -42,8 +43,14 @@ jobs:
       - name: Run PRE
         shell: bash
         run: |
-          if [ -n "${{ inputs.date }}" ]; then
-            ac10-next pre --date "${{ inputs.date }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ -n "${{ inputs.date }}" ]; then
+              ac10-next pre --date "${{ inputs.date }}"
+            else
+              ac10-next pre
+            fi
+          elif [ "${{ github.event.schedule }}" = "30 9 * * *" ]; then
+            ac10-next pre --if-missing
           else
             ac10-next pre
           fi

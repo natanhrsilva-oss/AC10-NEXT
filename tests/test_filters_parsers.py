@@ -4,6 +4,10 @@ from ac10next.providers.parsers import extract_highlightly_main_odds
 
 def test_structural_filters():
     assert exclusion_reason("Russia", "Premier League", "A", "B")
+    assert exclusion_reason("Ukraine", "Premier League", "A", "B")
+    assert exclusion_reason("Belarus", "Vysshaya Liga", "A", "B")
+    assert exclusion_reason("Russia", "UEFA Champions League", "A", "B") is None
+    assert exclusion_reason("Ukraine", "Europa League", "A", "B") is None
     assert exclusion_reason("Brazil", "U20 League", "A U20", "B U20")
     assert exclusion_reason("Brazil", "Serie A", "A", "B") is None
 

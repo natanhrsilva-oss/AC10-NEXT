@@ -108,9 +108,11 @@ class PregameBuilder:
         return contexts
 
 
-async def run_pre(settings: Settings, target_date: str | None = None) -> dict:
+async def run_pre(settings: Settings, target_date: str | None = None, *, skip_if_success: bool = False) -> dict:
     started=time.perf_counter(); local=ZoneInfo(settings.app_timezone); target_date=target_date or datetime.now(local).date().isoformat()
     async with Database(settings.supabase_database_url) as db, HighlightlyClient(settings) as provider:
+        if skip_if_success and await db.has_successful_run("PRE", target_date):
+            return {"skipped":True,"reason":"PRE do dia já concluído com sucesso","date":target_date}
         run_id=await db.create_run("PRE",settings.pre_model_version,{"date":target_date})
         try:
             raw=await provider.matches_all(target_date,settings.app_timezone); records=[]
@@ -145,9 +147,8 @@ async def run_pre(settings: Settings, target_date: str | None = None) -> dict:
                     await sheets.send_history(settings.google_sheets_webapp_url,settings.google_sheets_token,"PRE",pre_history,settings.app_timezone)
                 except Exception as exc:output_errors.append(f"sheets:{exc}")
             if settings.pre_discord_enabled and settings.discord_webhook_url:
-                summary=discord.pre_summary(match_map,pre_recommendations,total_prepared=len(contexts),limit=settings.pre_recommendation_limit)
-                if summary:
-                    key,text=summary
+                summaries=discord.pre_summaries(match_map,pre_recommendations,total_prepared=len(contexts),limit=settings.pre_recommendation_limit)
+                for key,text in summaries:
                     if await db.claim_notification(key,"discord",{"content":text}):
                         try:await discord.send(settings.discord_webhook_url,text); await db.mark_notification(key,sent=True)
                         except Exception as exc:await db.mark_notification(key,sent=False,error=str(exc)); output_errors.append(f"discord:{exc}")

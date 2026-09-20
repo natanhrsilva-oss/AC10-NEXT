@@ -71,26 +71,35 @@ def live_rows(matches: dict[str,MatchRecord], analyses: list[LiveAnalysis], pre:
         m=matches[a.match_id]; p=pre.get(a.match_id)
         event=dict(a.raw.get("event_state") or {})
         fresh=dict(a.raw.get("data_freshness") or {})
+        state=" ".join(str(a.state or "").strip().lower().replace("_"," ").split())
+        if state == "half time":
+            visual_status="INTERVALO"
+        elif a.status == "RECOMENDAÇÃO":
+            visual_status="ENTRAR"
+        elif a.status in {"AQUECENDO","SINAL"}:
+            visual_status="OBSERVAR"
+        else:
+            visual_status="X"
+        momentum_game=max(0.0,min(100.0,50.0+float(a.home_momentum)+float(a.away_momentum)))
         out.append({
             "País":m.country,"Campeonato":m.competition,"Mandante":m.home_team,"Visitante":m.away_team,
-            "Minuto":a.minute,"Placar":f"{a.home_score} x {a.away_score}","Status":a.status,"Entrada Analisada":a.selected_market,
-            "Índice":round(a.market_index,1),"Probabilidade %":round(a.selected_probability,1),"GPI":round(a.gpi,1),
-            "IDD Casa":round(a.home_idd,1),"IDD Visitante":round(a.away_idd,1),
-            "Momentum Casa":round(a.home_momentum,1),"Momentum Visitante":round(a.away_momentum,1),
+            "Minuto":a.minute,"Placar":f"{a.home_score} x {a.away_score}","Status":visual_status,
+            "Odd Justa":round(a.fair_odd,3) if a.fair_odd else "","Entrada Analisada":a.selected_market,
+            "Confirmações":f"{a.confirmation_count}/5","Índice":round(a.market_index,1),"Probabilidade %":round(a.selected_probability,1),
+            "Momentum Jogo":round(momentum_game,1),"Momentum Casa":round(a.home_momentum,1),"Momentum Visitante":round(a.away_momentum,1),
             "Chance Gol 10 min %":round(a.chance_goal_10,1),"Over +1,5 Gols a Mais %":round(a.over15_more_probability,1),
             "Evolução":a.raw.get("movement",{}).get("evolution",""),"Delta Recente":a.raw.get("movement",{}).get("delta",""),
-            "Confirmações":f"{a.confirmation_count}/5","Qualidade Mercado %":round(a.market_quality,1),
+            "Qualidade Mercado %":round(a.market_quality,1),"GPI":round(a.gpi,1),"IDD Casa":round(a.home_idd,1),"IDD Visitante":round(a.away_idd,1),
             "Gol Recente":"SIM" if event.get("post_goal_active") else "",
             "Min Desde Gol":event.get("minutes_since_goal","") if event.get("minutes_since_goal") is not None else "",
             "Fator Pós-Gol":_n(event.get("goal_factor"),2),
             "Dados Frescos":"NÃO" if fresh.get("stale_block") else "SIM",
-            "Odd Live":round(a.market_odd,3) if a.market_odd else "","Odd Justa":round(a.fair_odd,3) if a.fair_odd else "",
+            "Odd Live":round(a.market_odd,3) if a.market_odd else "",
             "EV %":round(a.ev_percent,2) if a.ev_percent is not None else "","Preço":a.price_status,
             "Prioridade Diário":p.live_priority if p else "","Mercado Pré":p.selected_market if p else "",
             "Probabilidade Pré %":round(p.selected_probability,1) if p else "","Atualizado":a.captured_at.isoformat(),
         })
     return out
-
 
 def history_rows(source: str, records: list[dict[str,Any]], timezone_name: str = "America/Sao_Paulo") -> list[dict[str,Any]]:
     source=source.upper()

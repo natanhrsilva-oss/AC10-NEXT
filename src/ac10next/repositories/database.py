@@ -41,6 +41,24 @@ class Database:
             )
             await conn.commit()
 
+    async def has_successful_run(self, run_type: str, target_date: str) -> bool:
+        """Return True when this workflow already completed successfully for the target date."""
+        async with self.pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    select 1
+                    from ac10_runs
+                    where run_type=%s
+                      and status='SUCCESS'
+                      and parameters->>'date'=%s
+                    order by finished_at desc nulls last
+                    limit 1
+                    """,
+                    (run_type, target_date),
+                )
+                return await cur.fetchone() is not None
+
     async def upsert_matches(self, matches: Iterable[MatchRecord]) -> None:
         rows = list(matches)
         if not rows:
