@@ -92,4 +92,4 @@ def test_weekly_audit_summary_contract():
     assert "AUDITORIA SEMANAL" in text
     assert "PRÉ" in text and "LIVE" in text
     assert "Acertos: **6**" in text
-    assert "Slots concluídos: **500/504**" in text
+    assert "Ciclos LIVE concluídos: **500/504**" in text

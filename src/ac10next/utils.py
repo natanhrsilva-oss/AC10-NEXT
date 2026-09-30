@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import re
 import unicodedata
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -82,3 +82,14 @@ def json_safe(value: Any) -> Any:
         return [json_safe(v) for v in value]
     return value
 
+
+
+def elapsed_seconds(now: datetime, previous: datetime | None) -> float | None:
+    """Return non-negative elapsed seconds, normalizing naive timestamps to UTC."""
+    if previous is None:
+        return None
+    if now.tzinfo is None:
+        now=now.replace(tzinfo=timezone.utc)
+    if previous.tzinfo is None:
+        previous=previous.replace(tzinfo=timezone.utc)
+    return max(0.0,(now.astimezone(timezone.utc)-previous.astimezone(timezone.utc)).total_seconds())

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from ac10next.domain.mappers import pregame_from_row
@@ -17,6 +17,7 @@ from ac10next.providers.highlightly import HighlightlyClient
 from ac10next.providers.parsers import LIVE_STATES, extract_highlightly_live_market_odd, live_stats, match_record, normalize_state
 from ac10next.repositories.database import Database
 from ac10next.settings import Settings
+from ac10next.utils import elapsed_seconds
 
 LOGGER=logging.getLogger(__name__)
 
@@ -34,37 +35,58 @@ def _row_context(row: dict) -> PregameContext:
     return pregame_from_row(row)
 
 
-def _quarter_slot(now_local: datetime) -> datetime:
-    return now_local.replace(minute=(now_local.minute // 15) * 15, second=0, microsecond=0)
+LIVE_ROLLING_INTERVAL_SECONDS=15*60
+LIVE_RUNNING_STALE_MINUTES=12
 
 
 async def run_live_scheduled(settings: Settings) -> dict:
-    """Watchdog entrypoint. Every 5 minutes, guarantee the current 15-minute slot exists.
+    """Cheap rolling controller invoked by GitHub roughly every five minutes.
 
-    A successful/recently-running slot is a cheap database-only no-op. Highlightly is
-    called only when the expected slot is missing or the previous attempt failed/stalled.
+    There are no fixed XX:00/15/30/45 slots anymore. Any successful LIVE run,
+    including a manual one, resets the clock. The controller only calls Highlightly
+    when at least 15 minutes have elapsed since the *start* of the latest successful
+    LIVE scan. Failed runs do not reset the clock, so the next heartbeat retries.
     """
-    local=ZoneInfo(settings.app_timezone); now_local=datetime.now(local)
+    local=ZoneInfo(settings.app_timezone); now_local=datetime.now(local); now_utc=datetime.now(timezone.utc)
     if not (settings.app_hour_start<=now_local.hour<=settings.app_hour_end):
         return {"skipped":True,"reason":"fora da janela operacional","hour":now_local.hour}
-    current_slot=_quarter_slot(now_local)
-    # Check the recent one-hour horizon oldest-first. This lets the watchdog recover
-    # a failed/stale previous slot instead of abandoning it as soon as a new quarter starts.
-    candidates=[current_slot-timedelta(minutes=15*i) for i in range(3,-1,-1)]
-    candidates=[s for s in candidates if s.date()==now_local.date() and settings.app_hour_start<=s.hour<=settings.app_hour_end]
-    missing_slot=None
+
     async with Database(settings.supabase_database_url) as db:
-        for slot in candidates:
-            slot_key=slot.isoformat(timespec="minutes")
-            if not await db.has_live_slot_run(slot_key):
-                missing_slot=slot
-                break
-    if missing_slot is not None:
-        return await run_live(settings,force=True,scheduled_slot=missing_slot)
-    return {"skipped":True,"reason":"slots LIVE recentes já executados/em execução","slot":current_slot.isoformat(timespec="minutes")}
+        if await db.has_recent_running_live(LIVE_RUNNING_STALE_MINUTES):
+            return {"skipped":True,"reason":"LIVE já está em execução"}
+        previous=await db.latest_successful_live_run()
+
+    previous_started=previous.get("started_at") if previous else None
+    elapsed=elapsed_seconds(now_utc,previous_started)
+    if elapsed is not None and elapsed < LIVE_ROLLING_INTERVAL_SECONDS:
+        return {
+            "skipped":True,
+            "reason":"intervalo LIVE ainda não completou 15 minutos",
+            "last_success_started_at":previous_started.isoformat() if previous_started else None,
+            "elapsed_minutes":round(elapsed/60.0,2),
+            "next_due_in_minutes":round((LIVE_ROLLING_INTERVAL_SECONDS-elapsed)/60.0,2),
+        }
+
+    controller_time=now_local.replace(second=0,microsecond=0)
+    return await run_live(
+        settings,
+        force=True,
+        scheduled_slot=controller_time,
+        trigger="rolling-controller",
+        previous_success_at=previous_started,
+        elapsed_since_success_seconds=elapsed,
+    )
 
 
-async def run_live(settings: Settings, *, force: bool = False, scheduled_slot: datetime | None = None) -> dict:
+async def run_live(
+    settings: Settings,
+    *,
+    force: bool = False,
+    scheduled_slot: datetime | None = None,
+    trigger: str = "manual",
+    previous_success_at: datetime | None = None,
+    elapsed_since_success_seconds: float | None = None,
+) -> dict:
     started=time.perf_counter(); local=ZoneInfo(settings.app_timezone); now_local=datetime.now(local)
     if not force and not (settings.app_hour_start<=now_local.hour<=settings.app_hour_end):
         return {"skipped":True,"reason":"fora da janela operacional","hour":now_local.hour}
@@ -72,9 +94,15 @@ async def run_live(settings: Settings, *, force: bool = False, scheduled_slot: d
     slot_key=scheduled_slot.isoformat(timespec="minutes") if scheduled_slot else None
     delay_minutes=max(0.0,(now_local-scheduled_slot).total_seconds()/60.0) if scheduled_slot else 0.0
     full_summary=bool(scheduled_slot and scheduled_slot.minute==0)
-    run_parameters={"date":target,"force":force}
+    run_parameters={"date":target,"force":force,"trigger":trigger}
     if slot_key:
+        # ``slot`` is kept for backward-compatible weekly observability, but in
+        # v0.4.8 it represents the actual rolling-controller execution minute.
         run_parameters.update({"slot":slot_key,"delay_minutes":round(delay_minutes,2)})
+    if previous_success_at is not None:
+        run_parameters["previous_success_at"]=previous_success_at.isoformat()
+    if elapsed_since_success_seconds is not None:
+        run_parameters["elapsed_since_success_minutes"]=round(elapsed_since_success_seconds/60.0,2)
     async with Database(settings.supabase_database_url) as db, HighlightlyClient(settings) as provider:
         run_id=await db.create_run("LIVE",settings.live_model_version,run_parameters)
         try:

@@ -1,0 +1,14 @@
+AC10 NEXT v0.4.8 — arquivos alterados
+
+.github/workflows/20-live.yml
+FIX_v0.4.8.md
+README.md
+pyproject.toml
+src/ac10next/__init__.py
+src/ac10next/cli.py
+src/ac10next/utils.py
+src/ac10next/outputs/discord.py
+src/ac10next/pipelines/live.py
+src/ac10next/repositories/database.py
+tests/test_live_scheduler_v048.py
+tests/test_discord.py

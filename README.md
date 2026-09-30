@@ -1,7 +1,16 @@
-# AC10 Next v0.4.7
+# AC10 Next v0.4.8
 
 Nova geração do AC10 estruturada em **PRE → LIVE → AUDIT**, com Supabase como fonte operacional de verdade, Google Sheets como visualização e Discord como canal de alerta.
 
+
+
+## v0.4.8 — LIVE rolling automation
+
+- LIVE automático passa a usar o último `LIVE SUCCESS` como relógio, em vez de slots fixos.
+- Qualquer execução manual bem-sucedida reinicia o intervalo de 15 minutos.
+- Heartbeat GitHub ~5 min consulta Supabase primeiro e só chama Highlightly quando `>=15 min`.
+- Cron deslocado para `:02/:07/:12/...` para reduzir contenção nos minutos mais congestionados.
+- PRE, AUDIT, motores, planilhas e lógica esportiva permanecem inalterados.
 
 ## v0.4.7 — automação resiliente e auditoria semanal
 
@@ -136,4 +145,4 @@ Ordem recomendada:
 - PRE: `AC10-NEXT-PRE-0.4.4`
 - LIVE: `AC10-NEXT-LIVE-0.4.4`
 - Calibration: `AC10-NEXT-CAL-0.4.4`
-- pacote Python: `0.4.7`
+- pacote Python: `0.4.8`

@@ -97,7 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     live = sub.add_parser("live", help="Executa o AC10 LIVE")
     live.add_argument("--force", action="store_true", help="Ignora janela operacional e controle de frequência")
-    live.add_argument("--scheduled", action="store_true", help="Watchdog: garante exatamente um processamento por slot de 15 minutos")
+    live.add_argument("--scheduled", action="store_true", help="Controlador: executa LIVE quando passaram >=15 min desde o último LIVE SUCCESS")
 
     audit = sub.add_parser("audit", help="Executa a auditoria semanal PRE + LIVE")
     audit.add_argument("--date", help="Data final YYYY-MM-DD da janela semanal. Padrão: hoje em America/Sao_Paulo")

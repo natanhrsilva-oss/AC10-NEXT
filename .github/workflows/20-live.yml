@@ -4,14 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: "Forçar coleta manual mesmo fora da janela/frequência"
+        description: "Forçar coleta manual agora (reinicia o relógio de 15 min após SUCCESS)"
         required: false
         default: true
         type: boolean
   schedule:
-    # Watchdog a cada 5 min. O código cria/recupera apenas os slots exatos XX:00/15/30/45.
-    # Brasília 06:00-23:59 = UTC 09:00-02:59.
-    - cron: "*/5 0-2,9-23 * * *"
+    # Heartbeat resiliente: acorda ~a cada 5 min, deslocado de XX:00 para reduzir
+    # contenção do scheduler do GitHub. O Python consulta o Supabase ANTES da API.
+    # Qualquer LIVE SUCCESS (inclusive manual) reinicia o relógio de 15 minutos.
+    # Usa timezone explícito para não depender de conversão UTC.
+    - cron: "2,7,12,17,22,27,32,37,42,47,52,57 6-23 * * *"
+      timezone: "America/Sao_Paulo"
 
 permissions:
   contents: read
@@ -43,7 +46,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .
-      - name: Run LIVE / watchdog
+      - name: Run LIVE / rolling controller
         shell: bash
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then

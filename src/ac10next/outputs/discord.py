@@ -195,7 +195,7 @@ def weekly_audit_summary(stats: dict[str,Any], reliability: dict[str,int], *, ex
     errors=int(reliability.get("errors") or 0)
     lines.extend([
         "🤖 **OPERAÇÃO LIVE**",
-        f"Slots concluídos: **{ok}/{expected_live_slots}** | Recuperados pelo watchdog: **{recovered}** | Execuções com erro: **{errors}**",
+        f"Ciclos LIVE concluídos: **{ok}/{expected_live_slots}** | Recuperações tardias: **{recovered}** | Execuções com erro: **{errors}**",
     ])
     return "\n".join(lines).strip()
 

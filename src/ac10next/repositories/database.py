@@ -59,11 +59,29 @@ class Database:
                 )
                 return await cur.fetchone() is not None
 
-    async def has_live_slot_run(self, slot: str) -> bool:
-        """Return True when a LIVE slot is already successful or is currently running.
+    async def latest_successful_live_run(self) -> dict[str, Any] | None:
+        """Return the newest successful LIVE run, manual or scheduled.
 
-        RUNNING rows older than 12 minutes are treated as stale so the watchdog can recover them.
+        The rolling LIVE controller deliberately uses ``started_at`` as its clock.
+        This means a manual run resets the 15-minute cadence from the moment that
+        scan began instead of waiting for a fixed XX:00/15/30/45 slot.
         """
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    """
+                    select id, started_at, finished_at, status, parameters, metrics
+                    from ac10_runs
+                    where run_type='LIVE' and status='SUCCESS'
+                    order by started_at desc
+                    limit 1
+                    """
+                )
+                row=await cur.fetchone()
+                return dict(row) if row else None
+
+    async def has_recent_running_live(self, stale_after_minutes: int = 12) -> bool:
+        """Protect against overlapping LIVE scans outside GitHub concurrency."""
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
@@ -71,15 +89,12 @@ class Database:
                     select 1
                     from ac10_runs
                     where run_type='LIVE'
-                      and parameters->>'slot'=%s
-                      and (
-                        status='SUCCESS'
-                        or (status='RUNNING' and started_at > now() - interval '12 minutes')
-                      )
+                      and status='RUNNING'
+                      and started_at > now() - (%s * interval '1 minute')
                     order by started_at desc
                     limit 1
                     """,
-                    (slot,),
+                    (stale_after_minutes,),
                 )
                 return await cur.fetchone() is not None
 
@@ -148,16 +163,16 @@ class Database:
         return {"start_date":start_date,"end_date":end_date,"totals":totals,"markets":markets}
 
     async def live_run_reliability(self, start_date: str, end_date: str) -> dict[str, int]:
-        """Summarize scheduled LIVE slot execution health for the weekly report."""
+        """Summarize rolling LIVE execution health for the weekly report."""
         sql="""
         select
-          count(distinct parameters->>'slot') filter (where status='SUCCESS' and coalesce(parameters->>'slot','')<>'')::int as successful_slots,
+          count(*) filter (where status='SUCCESS')::int as successful_slots,
           count(*) filter (where status='ERROR')::int as errors,
           count(*) filter (
             where status='SUCCESS'
-              and coalesce(parameters->>'slot','')<>''
-              and coalesce(parameters->>'delay_minutes','') ~ '^[0-9]+([.][0-9]+)?$'
-              and (parameters->>'delay_minutes')::numeric >= 5
+              and parameters->>'trigger'='rolling-controller'
+              and coalesce(parameters->>'elapsed_since_success_minutes','') ~ '^[0-9]+([.][0-9]+)?$'
+              and (parameters->>'elapsed_since_success_minutes')::numeric >= 20
           )::int as watchdog_recoveries
         from ac10_runs
         where run_type='LIVE'
