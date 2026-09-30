@@ -1,0 +1,7 @@
+AC10 NEXT v0.4.9
+- Supabase Cron como scheduler primario do LIVE.
+- GitHub schedule mantido como backup.
+- workflow_dispatch force=false passa pelo rolling controller de 15 min.
+- input source para diagnostico (manual/supabase).
+- SQL pronto para Vault + pg_cron + pg_net.
+- sem alteracoes em motores, planilhas, filtros ou probabilidades.

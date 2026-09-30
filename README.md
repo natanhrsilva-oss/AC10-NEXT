@@ -146,3 +146,6 @@ Ordem recomendada:
 - LIVE: `AC10-NEXT-LIVE-0.4.4`
 - Calibration: `AC10-NEXT-CAL-0.4.4`
 - pacote Python: `0.4.8`
+
+### Automacao LIVE resiliente (v0.4.9)
+O LIVE pode usar Supabase Cron como relogio primario e GitHub Actions schedule como backup. O setup esta em `scripts/setup_supabase_live_scheduler_v049.sql` e `FIX_v0.4.9.md`. O controlador so coleta quando passaram pelo menos 15 minutos desde o ultimo LIVE SUCCESS; execucoes manuais tambem reiniciam esse relogio.
