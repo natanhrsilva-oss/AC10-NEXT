@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from ac10next.domain.mappers import pregame_from_row
@@ -34,13 +34,49 @@ def _row_context(row: dict) -> PregameContext:
     return pregame_from_row(row)
 
 
-async def run_live(settings: Settings, *, force: bool = False) -> dict:
+def _quarter_slot(now_local: datetime) -> datetime:
+    return now_local.replace(minute=(now_local.minute // 15) * 15, second=0, microsecond=0)
+
+
+async def run_live_scheduled(settings: Settings) -> dict:
+    """Watchdog entrypoint. Every 5 minutes, guarantee the current 15-minute slot exists.
+
+    A successful/recently-running slot is a cheap database-only no-op. Highlightly is
+    called only when the expected slot is missing or the previous attempt failed/stalled.
+    """
+    local=ZoneInfo(settings.app_timezone); now_local=datetime.now(local)
+    if not (settings.app_hour_start<=now_local.hour<=settings.app_hour_end):
+        return {"skipped":True,"reason":"fora da janela operacional","hour":now_local.hour}
+    current_slot=_quarter_slot(now_local)
+    # Check the recent one-hour horizon oldest-first. This lets the watchdog recover
+    # a failed/stale previous slot instead of abandoning it as soon as a new quarter starts.
+    candidates=[current_slot-timedelta(minutes=15*i) for i in range(3,-1,-1)]
+    candidates=[s for s in candidates if s.date()==now_local.date() and settings.app_hour_start<=s.hour<=settings.app_hour_end]
+    missing_slot=None
+    async with Database(settings.supabase_database_url) as db:
+        for slot in candidates:
+            slot_key=slot.isoformat(timespec="minutes")
+            if not await db.has_live_slot_run(slot_key):
+                missing_slot=slot
+                break
+    if missing_slot is not None:
+        return await run_live(settings,force=True,scheduled_slot=missing_slot)
+    return {"skipped":True,"reason":"slots LIVE recentes já executados/em execução","slot":current_slot.isoformat(timespec="minutes")}
+
+
+async def run_live(settings: Settings, *, force: bool = False, scheduled_slot: datetime | None = None) -> dict:
     started=time.perf_counter(); local=ZoneInfo(settings.app_timezone); now_local=datetime.now(local)
     if not force and not (settings.app_hour_start<=now_local.hour<=settings.app_hour_end):
         return {"skipped":True,"reason":"fora da janela operacional","hour":now_local.hour}
     target=now_local.date().isoformat(); now_utc=datetime.now(timezone.utc)
+    slot_key=scheduled_slot.isoformat(timespec="minutes") if scheduled_slot else None
+    delay_minutes=max(0.0,(now_local-scheduled_slot).total_seconds()/60.0) if scheduled_slot else 0.0
+    full_summary=bool(scheduled_slot and scheduled_slot.minute==0)
+    run_parameters={"date":target,"force":force}
+    if slot_key:
+        run_parameters.update({"slot":slot_key,"delay_minutes":round(delay_minutes,2)})
     async with Database(settings.supabase_database_url) as db, HighlightlyClient(settings) as provider:
-        run_id=await db.create_run("LIVE",settings.live_model_version,{"date":target,"force":force})
+        run_id=await db.create_run("LIVE",settings.live_model_version,run_parameters)
         try:
             raw=await provider.matches_all(target,settings.app_timezone); live_records=[]
             for item in raw:
@@ -120,13 +156,28 @@ async def run_live(settings: Settings, *, force: bool = False) -> dict:
                     live_history=await db.fetch_recommendation_history("LIVE",settings.sheet_history_limit) if rec_count else []
                     await sheets.send_history(settings.google_sheets_webapp_url,settings.google_sheets_token,"LIVE",live_history,settings.app_timezone)
                 except Exception as exc:output_errors.append(f"sheets:{exc}")
-            if settings.live_discord_enabled and settings.discord_webhook_url:
-                summary=discord.live_summary(match_map,analyses,pre_due,min_index=settings.live_summary_min_index,limit=settings.live_summary_limit)
+            if settings.live_discord_enabled and settings.live_discord_webhook:
+                summary=discord.live_summary(
+                    match_map,analyses,pre_due,
+                    min_index=settings.live_summary_min_index,
+                    limit=settings.live_summary_limit,
+                    total_with_data=len(analyses),
+                    local_time=(scheduled_slot or now_local).strftime("%H:%M"),
+                )
                 if summary:
-                    key,text=summary
-                    if await db.claim_notification(key,"discord",{"content":text}):
-                        try:await discord.send(settings.discord_webhook_url,text); await db.mark_notification(key,sent=True)
-                        except Exception as exc:await db.mark_notification(key,sent=False,error=str(exc)); output_errors.append(f"discord:{exc}")
+                    state_hash,text=summary
+                    last_payload=await db.latest_sent_notification_payload("discord-live")
+                    last_state=str((last_payload or {}).get("state_hash") or "")
+                    should_send=full_summary or state_hash!=last_state
+                    if should_send:
+                        notification_slot=slot_key or now_local.isoformat(timespec="minutes")
+                        key=f"live-summary:{notification_slot}:{state_hash}"
+                        payload={"content":text,"state_hash":state_hash,"slot":notification_slot,"full_summary":full_summary}
+                        if await db.claim_notification(key,"discord-live",payload):
+                            try:
+                                await discord.send(settings.live_discord_webhook,text); await db.mark_notification(key,sent=True)
+                            except Exception as exc:
+                                await db.mark_notification(key,sent=False,error=str(exc)); output_errors.append(f"discord:{exc}")
             await db.upsert_api_usage("highlightly","LIVE",provider.usage())
             metrics={"active":len(live_records),"due":len(due),"processed":len(analyses),"above_55":sum(a.market_index>=settings.live_summary_min_index for a in analyses),"sporting_candidates":sporting_candidates_count,"signals_unpriced":sum(a.status=="SINAL" for a in analyses),"recommendations":sum(a.status=="RECOMENDAÇÃO" for a in analyses),"new_recommendations":rec_count,"price_mode":"REQUIRED" if settings.live_require_price_for_recommendation else "IGNORED","odds_candidates":len(price_candidates),"priced":sum(a.market_odd is not None for a in analyses),"post_goal_cooldowns":sum(bool((a.raw.get("event_state") or {}).get("post_goal_active")) for a in analyses),"stale_blocks":sum(bool((a.raw.get("data_freshness") or {}).get("stale_block")) for a in analyses),"emergency_pre":emergency,"output_errors":output_errors,"api":provider.usage()}
             await db.finish_run(run_id,status="SUCCESS",duration_ms=int((time.perf_counter()-started)*1000),metrics=metrics); return metrics

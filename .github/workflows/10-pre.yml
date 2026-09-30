@@ -8,9 +8,11 @@ on:
         required: false
         type: string
   schedule:
-    # Brasilia (America/Sao_Paulo): 06:00 execução principal; 06:30 checagem de segurança.
+    # Brasília (UTC-3): 06:00 principal; 06:30 e 07:00 são watchdogs.
+    # TODOS usam --if-missing: depois de um PRE SUCCESS no dia, nenhuma execução automática roda de novo.
     - cron: "0 9 * * *"
     - cron: "30 9 * * *"
+    - cron: "0 10 * * *"
 
 permissions:
   contents: read
@@ -27,6 +29,8 @@ jobs:
       SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
       HIGHLIGHTLY_API_KEY: ${{ secrets.HIGHLIGHTLY_API_KEY }}
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      DISCORD_WEBHOOK_PRE: ${{ secrets.DISCORD_WEBHOOK_PRE }}
+      DISCORD_WEBHOOK_LIVE: ${{ secrets.DISCORD_WEBHOOK_LIVE }}
       GOOGLE_SHEETS_WEBAPP_URL: ${{ secrets.GOOGLE_SHEETS_WEBAPP_URL }}
       GOOGLE_SHEETS_TOKEN: ${{ secrets.GOOGLE_SHEETS_TOKEN }}
       APP_TIMEZONE: America/Sao_Paulo
@@ -49,8 +53,6 @@ jobs:
             else
               ac10-next pre
             fi
-          elif [ "${{ github.event.schedule }}" = "30 9 * * *" ]; then
-            ac10-next pre --if-missing
           else
-            ac10-next pre
+            ac10-next pre --if-missing
           fi

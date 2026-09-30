@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from psycopg.rows import dict_row
 
 from ac10next.pipelines.audit import run_audit
-from ac10next.pipelines.live import run_live
+from ac10next.pipelines.live import run_live, run_live_scheduled
 from ac10next.pipelines.pre import run_pre
 from ac10next.repositories.database import Database
 from ac10next.settings import Settings
@@ -60,7 +60,9 @@ async def _health(settings: Settings) -> dict:
         "live_model_version": settings.live_model_version,
         "timezone": settings.app_timezone,
         "local_time": datetime.now(ZoneInfo(settings.app_timezone)).isoformat(timespec="seconds"),
-        "discord_configured": bool(settings.discord_webhook_url.strip()),
+        "discord_configured": bool(settings.pre_discord_webhook or settings.live_discord_webhook),
+        "discord_pre_configured": bool(settings.pre_discord_webhook),
+        "discord_live_configured": bool(settings.live_discord_webhook),
         "sheets_configured": bool(settings.google_sheets_webapp_url.strip() and settings.google_sheets_token.strip()),
     }
 
@@ -73,6 +75,8 @@ async def _async_main(args: argparse.Namespace) -> dict:
     if args.command == "pre":
         return await run_pre(settings, target_date=args.date, skip_if_success=args.if_missing)
     if args.command == "live":
+        if args.scheduled:
+            return await run_live_scheduled(settings)
         return await run_live(settings, force=args.force)
     if args.command == "audit":
         return await run_audit(settings, target_date=args.date)
@@ -93,9 +97,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     live = sub.add_parser("live", help="Executa o AC10 LIVE")
     live.add_argument("--force", action="store_true", help="Ignora janela operacional e controle de frequência")
+    live.add_argument("--scheduled", action="store_true", help="Watchdog: garante exatamente um processamento por slot de 15 minutos")
 
-    audit = sub.add_parser("audit", help="Audita recomendações de uma data finalizada")
-    audit.add_argument("--date", help="Data YYYY-MM-DD. Padrão: ontem em America/Sao_Paulo")
+    audit = sub.add_parser("audit", help="Executa a auditoria semanal PRE + LIVE")
+    audit.add_argument("--date", help="Data final YYYY-MM-DD da janela semanal. Padrão: hoje em America/Sao_Paulo")
     return parser
 
 

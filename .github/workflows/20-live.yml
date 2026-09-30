@@ -4,13 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: "Forçar coleta mesmo fora da janela/frequência"
+        description: "Forçar coleta manual mesmo fora da janela/frequência"
         required: false
         default: true
         type: boolean
   schedule:
-    # 06:15/06:30 até 23:15/23:30 em America/Sao_Paulo.
-    - cron: "15,30 0-2,9-23 * * *"
+    # Watchdog a cada 5 min. O código cria/recupera apenas os slots exatos XX:00/15/30/45.
+    # Brasília 06:00-23:59 = UTC 09:00-02:59.
+    - cron: "*/5 0-2,9-23 * * *"
 
 permissions:
   contents: read
@@ -27,6 +28,8 @@ jobs:
       SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
       HIGHLIGHTLY_API_KEY: ${{ secrets.HIGHLIGHTLY_API_KEY }}
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      DISCORD_WEBHOOK_PRE: ${{ secrets.DISCORD_WEBHOOK_PRE }}
+      DISCORD_WEBHOOK_LIVE: ${{ secrets.DISCORD_WEBHOOK_LIVE }}
       GOOGLE_SHEETS_WEBAPP_URL: ${{ secrets.GOOGLE_SHEETS_WEBAPP_URL }}
       GOOGLE_SHEETS_TOKEN: ${{ secrets.GOOGLE_SHEETS_TOKEN }}
       APP_TIMEZONE: America/Sao_Paulo
@@ -40,11 +43,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .
-      - name: Run LIVE
+      - name: Run LIVE / watchdog
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force }}" = "true" ]; then
-            ac10-next live --force
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ "${{ inputs.force }}" = "true" ]; then
+              ac10-next live --force
+            else
+              ac10-next live
+            fi
           else
-            ac10-next live
+            ac10-next live --scheduled
           fi

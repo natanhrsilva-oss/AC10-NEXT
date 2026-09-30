@@ -1,6 +1,16 @@
-# AC10 Next v0.4.5
+# AC10 Next v0.4.7
 
 Nova geração do AC10 estruturada em **PRE → LIVE → AUDIT**, com Supabase como fonte operacional de verdade, Google Sheets como visualização e Discord como canal de alerta.
+
+
+## v0.4.7 — automação resiliente e auditoria semanal
+
+- PRE automático às 06:00, com watchdogs às 06:30 e 07:00; depois de um `PRE SUCCESS`, não existe nova execução automática no mesmo dia.
+- LIVE organizado em slots `XX:00/15/30/45`, com watchdog de 5 minutos baseado no `ac10_runs`; o watchdog só chama a API quando o slot esperado está ausente/falhou.
+- Discord separado por `DISCORD_WEBHOOK_PRE` (PRE + AUDIT) e `DISCORD_WEBHOOK_LIVE`, mantendo o webhook legado como fallback.
+- LIVE passa a enviar panorama operacional e reduz spam: resumo completo no `XX:00`; nos demais quartos somente quando houver mudança relevante.
+- AUDIT deixa de ser diário e passa a ser semanal, terça às 23:00 de Brasília, com consolidado PRE/LIVE e saúde dos slots LIVE.
+- Nenhuma migration, alteração de motor esportivo ou mudança de planilha.
 
 
 ## v0.4.5 — correção do AUDIT
@@ -105,7 +115,7 @@ No LIVE, as métricas usam a regra visual já definida: >55 verde, 45–55 amare
 - `00 - Infra Check`
 - `10 - AC10 PRE`
 - `20 - AC10 LIVE`
-- `30 - AC10 AUDIT`
+- `30 - AC10 AUDIT WEEKLY`
 - `40 - Health`
 - `90 - Tests`
 
@@ -126,4 +136,4 @@ Ordem recomendada:
 - PRE: `AC10-NEXT-PRE-0.4.4`
 - LIVE: `AC10-NEXT-LIVE-0.4.4`
 - Calibration: `AC10-NEXT-CAL-0.4.4`
-- pacote Python: `0.4.5`
+- pacote Python: `0.4.7`

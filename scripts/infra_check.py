@@ -37,10 +37,17 @@ def main() -> int:
 
     # These are checked for presence only. They are not used or printed here.
     require_env("HIGHLIGHTLY_API_KEY")
-    if os.getenv("DISCORD_WEBHOOK_URL", "").strip():
-        print("✅ Secret configurado: DISCORD_WEBHOOK_URL")
+    legacy = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
+    pre = os.getenv("DISCORD_WEBHOOK_PRE", "").strip()
+    live = os.getenv("DISCORD_WEBHOOK_LIVE", "").strip()
+    if pre or legacy:
+        print("✅ Discord PRE/AUDIT configurado")
     else:
-        print("⚠️ DISCORD_WEBHOOK_URL ainda não configurado (não bloqueia este teste).")
+        print("⚠️ Discord PRE/AUDIT ainda não configurado (não bloqueia este teste).")
+    if live or legacy:
+        print("✅ Discord LIVE configurado")
+    else:
+        print("⚠️ Discord LIVE ainda não configurado (não bloqueia este teste).")
 
     print("\nConectando ao Supabase...")
     try:

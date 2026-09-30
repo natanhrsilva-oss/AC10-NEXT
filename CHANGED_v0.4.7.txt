@@ -1,0 +1,22 @@
+AC10 NEXT v0.4.7 — arquivos alterados
+
+.env.example
+.github/workflows/00-infra-check.yml
+.github/workflows/10-pre.yml
+.github/workflows/20-live.yml
+.github/workflows/30-audit.yml
+.github/workflows/40-health.yml
+FIX_v0.4.7.md
+README.md
+pyproject.toml
+scripts/infra_check.py
+src/ac10next/__init__.py
+src/ac10next/cli.py
+src/ac10next/outputs/discord.py
+src/ac10next/pipelines/audit.py
+src/ac10next/pipelines/live.py
+src/ac10next/pipelines/pre.py
+src/ac10next/repositories/database.py
+src/ac10next/settings.py
+tests/test_discord.py
+tests/test_settings.py

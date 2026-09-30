@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     highlightly_bookmaker: str = "Bet365"
 
     discord_webhook_url: str = ""
+    discord_webhook_pre: str = ""
+    discord_webhook_live: str = ""
     google_sheets_webapp_url: str = ""
     google_sheets_token: str = ""
 
@@ -71,6 +73,16 @@ class Settings(BaseSettings):
     pre_discord_enabled: bool = True
     live_discord_enabled: bool = True
     sheets_enabled: bool = True
+
+    @property
+    def pre_discord_webhook(self) -> str:
+        """PRE + AUDIT use their own channel, with legacy webhook as fallback."""
+        return self.discord_webhook_pre.strip() or self.discord_webhook_url.strip()
+
+    @property
+    def live_discord_webhook(self) -> str:
+        """LIVE uses its own channel, with legacy webhook as fallback."""
+        return self.discord_webhook_live.strip() or self.discord_webhook_url.strip()
 
     @property
     def database_enabled(self) -> bool:

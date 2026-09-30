@@ -59,6 +59,116 @@ class Database:
                 )
                 return await cur.fetchone() is not None
 
+    async def has_live_slot_run(self, slot: str) -> bool:
+        """Return True when a LIVE slot is already successful or is currently running.
+
+        RUNNING rows older than 12 minutes are treated as stale so the watchdog can recover them.
+        """
+        async with self.pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    select 1
+                    from ac10_runs
+                    where run_type='LIVE'
+                      and parameters->>'slot'=%s
+                      and (
+                        status='SUCCESS'
+                        or (status='RUNNING' and started_at > now() - interval '12 minutes')
+                      )
+                    order by started_at desc
+                    limit 1
+                    """,
+                    (slot,),
+                )
+                return await cur.fetchone() is not None
+
+    async def latest_sent_notification_payload(self, channel: str) -> dict[str, Any] | None:
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    """
+                    select payload
+                    from ac10_notifications
+                    where channel=%s and status='SENT'
+                    order by sent_at desc nulls last, created_at desc
+                    limit 1
+                    """,
+                    (channel,),
+                )
+                row=await cur.fetchone()
+                return dict(row["payload"] or {}) if row else None
+
+    async def weekly_audit_stats(self, start_date: str, end_date: str) -> dict[str, Any]:
+        """Aggregate recommendation/audit performance by source and market for a local match-date window."""
+        base_sql="""
+        select r.source,
+               count(*)::int as recommendations,
+               count(distinct r.match_id)::int as games,
+               count(a.recommendation_id)::int as reviewed,
+               count(*) filter (where a.result='GREEN')::int as greens,
+               count(*) filter (where a.result='RED')::int as reds,
+               count(*) filter (where a.result='PENDENTE_HT')::int as pending_ht,
+               count(*) filter (where a.recommendation_id is null)::int as unaudited,
+               count(*) filter (where r.market_odd is not null and r.market_odd>1)::int as priced,
+               coalesce(sum(case when r.market_odd is not null and r.market_odd>1 then a.profit_units else 0 end),0) as profit_units
+        from ac10_recommendations r
+        join ac10_matches m on m.match_id=r.match_id
+        left join ac10_audits a on a.recommendation_id=r.id
+        where m.match_date between %s and %s
+        group by r.source
+        order by r.source
+        """
+        market_sql="""
+        select r.source,r.market,
+               count(*)::int as recommendations,
+               count(distinct r.match_id)::int as games,
+               count(a.recommendation_id)::int as reviewed,
+               count(*) filter (where a.result='GREEN')::int as greens,
+               count(*) filter (where a.result='RED')::int as reds
+        from ac10_recommendations r
+        join ac10_matches m on m.match_id=r.match_id
+        left join ac10_audits a on a.recommendation_id=r.id
+        where m.match_date between %s and %s
+        group by r.source,r.market
+        order by r.source, count(*) desc, r.market
+        """
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(base_sql,(start_date,end_date))
+                totals={}
+                for row in await cur.fetchall():
+                    d=dict(row)
+                    d["profit_units"]=float(d.get("profit_units") or 0.0)
+                    totals[str(d["source"])]=d
+                await cur.execute(market_sql,(start_date,end_date))
+                markets:dict[str,list[dict[str,Any]]]={}
+                for row in await cur.fetchall():
+                    d=dict(row); markets.setdefault(str(d["source"]),[]).append(d)
+        return {"start_date":start_date,"end_date":end_date,"totals":totals,"markets":markets}
+
+    async def live_run_reliability(self, start_date: str, end_date: str) -> dict[str, int]:
+        """Summarize scheduled LIVE slot execution health for the weekly report."""
+        sql="""
+        select
+          count(distinct parameters->>'slot') filter (where status='SUCCESS' and coalesce(parameters->>'slot','')<>'')::int as successful_slots,
+          count(*) filter (where status='ERROR')::int as errors,
+          count(*) filter (
+            where status='SUCCESS'
+              and coalesce(parameters->>'slot','')<>''
+              and coalesce(parameters->>'delay_minutes','') ~ '^[0-9]+([.][0-9]+)?$'
+              and (parameters->>'delay_minutes')::numeric >= 5
+          )::int as watchdog_recoveries
+        from ac10_runs
+        where run_type='LIVE'
+          and parameters->>'date' between %s and %s
+        """
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(sql,(start_date,end_date))
+                row=await cur.fetchone() or {}
+        return {k:int(row.get(k) or 0) for k in ("successful_slots","errors","watchdog_recoveries")}
+
     async def upsert_matches(self, matches: Iterable[MatchRecord]) -> None:
         rows = list(matches)
         if not rows:
@@ -287,7 +397,7 @@ class Database:
         if not match_ids:return []
         sql="""
         select r.* from ac10_recommendations r left join ac10_audits a on a.recommendation_id=r.id
-        where r.match_id=any(%s) and a.recommendation_id is null order by r.created_at
+        where r.match_id=any(%s) and (a.recommendation_id is null or a.result='PENDENTE_HT') order by r.created_at
         """
         async with self.pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
@@ -295,5 +405,5 @@ class Database:
 
     async def insert_audit(self, recommendation_id: str, result: str, profit_units: float, payload: dict[str,Any]) -> None:
         async with self.pool.connection() as conn:
-            await conn.execute("insert into ac10_audits(recommendation_id,result,profit_units,payload) values(%s,%s,%s,%s) on conflict(recommendation_id) do nothing",(recommendation_id,result,float(profit_units),Jsonb(json_safe(payload))))
+            await conn.execute("insert into ac10_audits(recommendation_id,result,profit_units,payload) values(%s,%s,%s,%s) on conflict(recommendation_id) do update set result=excluded.result,profit_units=excluded.profit_units,payload=excluded.payload,evaluated_at=now()",(recommendation_id,result,float(profit_units),Jsonb(json_safe(payload))))
             await conn.commit()

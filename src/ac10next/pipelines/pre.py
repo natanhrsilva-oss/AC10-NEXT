@@ -146,11 +146,11 @@ async def run_pre(settings: Settings, target_date: str | None = None, *, skip_if
                     pre_history=await db.fetch_recommendation_history("PRE",settings.sheet_history_limit) if new_pre_recommendations else []
                     await sheets.send_history(settings.google_sheets_webapp_url,settings.google_sheets_token,"PRE",pre_history,settings.app_timezone)
                 except Exception as exc:output_errors.append(f"sheets:{exc}")
-            if settings.pre_discord_enabled and settings.discord_webhook_url:
+            if settings.pre_discord_enabled and settings.pre_discord_webhook:
                 summaries=discord.pre_summaries(match_map,pre_recommendations,total_prepared=len(contexts),limit=settings.pre_recommendation_limit)
                 for key,text in summaries:
                     if await db.claim_notification(key,"discord",{"content":text}):
-                        try:await discord.send(settings.discord_webhook_url,text); await db.mark_notification(key,sent=True)
+                        try:await discord.send(settings.pre_discord_webhook,text); await db.mark_notification(key,sent=True)
                         except Exception as exc:await db.mark_notification(key,sent=False,error=str(exc)); output_errors.append(f"discord:{exc}")
             await db.upsert_api_usage("highlightly","PRE",provider.usage())
             metrics={"matches_found":len(records),"eligible":len(eligible),"contexts":len(contexts),"priority_A":sum(c.live_priority=="A" for c in contexts),"priority_B":sum(c.live_priority=="B" for c in contexts),"pre_recommendations":len(pre_recommendations),"new_pre_recommendations":new_pre_recommendations,"pre_funnel":pre_funnel,"output_errors":output_errors,"api":provider.usage()}

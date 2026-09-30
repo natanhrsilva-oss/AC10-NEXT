@@ -43,41 +43,161 @@ def _ellipsize(value: str, limit: int) -> str:
     return text if len(text)<=limit else text[:max(1,limit-1)].rstrip()+"…"
 
 
-def live_summary(matches: dict[str,MatchRecord], analyses: list[LiveAnalysis], pre: dict[str,PregameContext], *, min_index: float = 55.0, limit: int = 5) -> tuple[str,str] | None:
-    # Discord only shows matches that are actively running and actionable enough
-    # to watch. Half-time and SEM ENTRADA are never surfaced.
-    running = [
-        a for a in analyses
-        if a.market_index >= min_index
-        and normalize_state(a.state) != "half time"
-        and a.status in {"AQUECENDO", "SINAL", "RECOMENDAÇÃO"}
-    ]
+def _live_state_hash(analyses: list[LiveAnalysis], *, min_index: float) -> str:
+    """Hash only meaningful LIVE changes so small metric noise does not spam Discord."""
+    running=[a for a in analyses if normalize_state(a.state)!="half time"]
+    above=[a for a in running if a.market_index>=min_index]
+    status_priority={"RECOMENDAÇÃO":3,"SINAL":2,"AQUECENDO":1,"SEM ENTRADA":0}
+    top=sorted(
+        [a for a in above if a.status in {"AQUECENDO","SINAL","RECOMENDAÇÃO"}],
+        key=lambda a:(status_priority.get(a.status,0),a.market_index,a.confirmation_count,a.selected_probability),
+        reverse=True,
+    )[:5]
+    state={
+        "with_data":len(running),
+        "above":len(above),
+        "recs":sum(a.status=="RECOMENDAÇÃO" for a in above),
+        "signal":sum(a.status=="SINAL" for a in above),
+        "back_home":sum(a.selected_market=="BACK CASA" for a in above),
+        "back_away":sum(a.selected_market=="BACK VISITANTE" for a in above),
+        "prob60":sum(a.selected_probability>=60 for a in running),
+        "mom15":sum(abs(float(a.home_momentum)-float(a.away_momentum))>=15 for a in running),
+        "goal60":sum(a.chance_goal_10>=60 for a in running),
+        "top":[
+            (
+                a.match_id,a.selected_market,a.status,a.home_score,a.away_score,
+                int(a.market_index//5),int(a.selected_probability//5),
+                int(abs(float(a.home_momentum)-float(a.away_momentum))//5),
+            )
+            for a in top
+        ],
+    }
+    return hashlib.sha1(json.dumps(state,sort_keys=True).encode()).hexdigest()[:20]
+
+
+def live_summary(
+    matches: dict[str,MatchRecord],
+    analyses: list[LiveAnalysis],
+    pre: dict[str,PregameContext],
+    *,
+    min_index: float = 55.0,
+    limit: int = 5,
+    total_with_data: int | None = None,
+    local_time: str | None = None,
+) -> tuple[str,str] | None:
+    """Build the operational LIVE panorama plus the best current opportunities.
+
+    The first tuple item is a stable state hash. The pipeline compares it with the
+    last sent state so :15/:30/:45 messages are only emitted when something
+    meaningful changed. Hourly :00 summaries are always allowed by the pipeline.
+    """
+    del pre  # kept in the signature for compatibility and future context use
+    running=[a for a in analyses if normalize_state(a.state)!="half time"]
     if not running:
         return None
 
-    # Recommendations always take priority. If there are none (or fewer than the
-    # limit), the strongest observation candidates follow by index/confirmations.
-    status_priority = {"RECOMENDAÇÃO": 3, "SINAL": 2, "AQUECENDO": 1}
-    eligible = sorted(
-        running,
+    above=[a for a in running if a.market_index>=min_index]
+    actionable=[a for a in above if a.status in {"AQUECENDO","SINAL","RECOMENDAÇÃO"}]
+    status_priority={"RECOMENDAÇÃO":3,"SINAL":2,"AQUECENDO":1}
+    top=sorted(
+        actionable,
         key=lambda a:(status_priority.get(a.status,0),a.market_index,a.confirmation_count,a.selected_probability),
         reverse=True,
-    )
-    top=eligible[:limit]
-    recs=sum(a.status=="RECOMENDAÇÃO" for a in eligible)
-    lines=[f"⚡ **AC10 LIVE** — {len(eligible)} jogo(s) ativos acima de {min_index:.0f} de índice | ✅ {recs} entrada(s)",""]
-    for i,a in enumerate(top,1):
-        m=matches[a.match_id]
-        emoji="✅" if a.status=="RECOMENDAÇÃO" else "👀" if a.status=="SINAL" else "🌡️"
-        lines.append(f"{emoji} **{i}. {m.home_team} x {m.away_team}** {a.minute}' | **{a.home_score} x {a.away_score}** | **({_location(m)})**")
-        lines.append(f"Entrada: **{a.selected_market}** | Índice **{a.market_index:.1f}** | Prob. **{a.selected_probability:.1f}%** | Conf. **{a.confirmation_count}/5** |")
-        fair = f"{a.fair_odd:.2f}" if a.fair_odd else "ND"
-        lines.append(f"Odd justa **{fair}** | Gol 10m **{a.chance_goal_10:.1f}%** | +1,5 gols **{a.over15_more_probability:.1f}%**")
-        lines.append("")
+    )[:limit]
+
+    with_data=int(total_with_data if total_with_data is not None else len(running))
+    recs=sum(a.status=="RECOMENDAÇÃO" for a in above)
+    observing=sum(a.status in {"SINAL","AQUECENDO"} for a in above)
+    back_home=sum(a.selected_market=="BACK CASA" for a in above)
+    back_away=sum(a.selected_market=="BACK VISITANTE" for a in above)
+    goals=max(0,len(above)-back_home-back_away)
+    prob60=sum(a.selected_probability>=60 for a in running)
+    momentum15=sum(abs(float(a.home_momentum)-float(a.away_momentum))>=15 for a in running)
+    goal10_60=sum(a.chance_goal_10>=60 for a in running)
+
+    stamp=f" — {local_time}" if local_time else ""
+    lines=[
+        f"⚡ **AC10 LIVE{stamp}**",
+        f"📡 **{with_data} jogos com dados**",
+        f"🎯 Índice ≥{min_index:.0f}: **{len(above)}** | ✅ Entradas: **{recs}** | 👀 Observar: **{observing}**",
+        f"🏠 Back Casa ≥{min_index:.0f}: **{back_home}** | ✈️ Back Visitante ≥{min_index:.0f}: **{back_away}** | ⚽ Gols ≥{min_index:.0f}: **{goals}**",
+        f"📈 Prob. ≥60%: **{prob60}** | 🚀 Momentum dominante Δ≥15: **{momentum15}** | ⚡ Gol 10m ≥60%: **{goal10_60}**",
+        "",
+        "🏆 **MELHORES OPORTUNIDADES**",
+    ]
+    if not top:
+        lines.append(f"Nenhum jogo acionável acima de **{min_index:.0f}** neste momento.")
+    else:
+        for i,a in enumerate(top,1):
+            m=matches.get(a.match_id)
+            if not m:
+                continue
+            emoji="✅" if a.status=="RECOMENDAÇÃO" else "👀" if a.status=="SINAL" else "🌡️"
+            mom_delta=abs(float(a.home_momentum)-float(a.away_momentum))
+            lines.append(f"{emoji} **{i}. {m.home_team} x {m.away_team}** {a.minute}' | **{a.home_score} x {a.away_score}** | **({_location(m)})**")
+            lines.append(f"Entrada: **{a.selected_market}** | Índice **{a.market_index:.1f}** | Prob. **{a.selected_probability:.1f}%** | Conf. **{a.confirmation_count}/5**")
+            fair=f"{a.fair_odd:.2f}" if a.fair_odd else "ND"
+            lines.append(f"Odd justa **{fair}** | Gol 10m **{a.chance_goal_10:.1f}%** | +1,5 gols **{a.over15_more_probability:.1f}%** | Mom. Δ **{mom_delta:.1f}**")
+            lines.append("")
     text="\n".join(lines).strip()
-    key_obj=[(a.match_id,a.selected_market,a.status,int(a.market_index//5),a.home_score,a.away_score) for a in top]
-    key="live-summary:"+hashlib.sha1(json.dumps(key_obj,sort_keys=True).encode()).hexdigest()[:20]
-    return key,text
+    if len(text)>1900:
+        # Keep the panorama intact and compact only fixture metadata.
+        compact=lines[:6]+["","🏆 **MELHORES OPORTUNIDADES**"]
+        for i,a in enumerate(top,1):
+            m=matches.get(a.match_id)
+            if not m:
+                continue
+            emoji="✅" if a.status=="RECOMENDAÇÃO" else "👀" if a.status=="SINAL" else "🌡️"
+            compact.append(f"{emoji} **{i}. {_ellipsize(m.home_team,18)} x {_ellipsize(m.away_team,18)}** {a.minute}' | **{a.home_score} x {a.away_score}**")
+            compact.append(f"**{a.selected_market}** | Índ. **{a.market_index:.1f}** | Prob. **{a.selected_probability:.1f}%** | Gol10 **{a.chance_goal_10:.1f}%**")
+        text="\n".join(compact).strip()
+    return _live_state_hash(running,min_index=min_index),text
+
+
+def weekly_audit_summary(stats: dict[str,Any], reliability: dict[str,int], *, expected_live_slots: int) -> str:
+    start=str(stats.get("start_date") or "")
+    end=str(stats.get("end_date") or "")
+    totals=dict(stats.get("totals") or {})
+    markets=dict(stats.get("markets") or {})
+    lines=[f"📊 **AC10 — AUDITORIA SEMANAL** | {start} → {end}",""]
+
+    for source,title,icon in (("PRE","PRÉ","🎯"),("LIVE","LIVE","⚡")):
+        row=dict(totals.get(source) or {})
+        recs=int(row.get("recommendations") or 0)
+        games=int(row.get("games") or 0)
+        reviewed=int(row.get("reviewed") or 0)
+        greens=int(row.get("greens") or 0)
+        reds=int(row.get("reds") or 0)
+        pending=max(0,recs-greens-reds)
+        decided=greens+reds
+        hit=(greens/decided*100) if decided else 0.0
+        priced=int(row.get("priced") or 0)
+        units=float(row.get("profit_units") or 0.0)
+        lines.extend([
+            f"{icon} **{title}**",
+            f"Jogos: **{games}** | Entradas: **{recs}** | Verificadas: **{reviewed}** | Pendentes: **{pending}**",
+            f"🟢 Acertos: **{greens}** | 🔴 Erros: **{reds}** | Assertividade: **{hit:.1f}%**",
+        ])
+        if priced:
+            lines.append(f"💰 Entradas com odd: **{priced}** | Resultado auditado: **{units:+.2f}u**")
+        market_rows=list(markets.get(source) or [])[:4]
+        if market_rows:
+            parts=[]
+            for mr in market_rows:
+                mg=int(mr.get("greens") or 0); mrds=int(mr.get("reds") or 0); md=mg+mrds
+                rate=(mg/md*100) if md else 0.0
+                parts.append(f"{mr.get('market')}: {mg}-{mrds} ({rate:.0f}%)")
+            lines.append("Mercados: " + " • ".join(parts))
+        lines.append("")
+
+    ok=int(reliability.get("successful_slots") or 0)
+    recovered=int(reliability.get("watchdog_recoveries") or 0)
+    errors=int(reliability.get("errors") or 0)
+    lines.extend([
+        "🤖 **OPERAÇÃO LIVE**",
+        f"Slots concluídos: **{ok}/{expected_live_slots}** | Recuperados pelo watchdog: **{recovered}** | Execuções com erro: **{errors}**",
+    ])
+    return "\n".join(lines).strip()
 
 
 def pre_summaries(matches: dict[str,MatchRecord], contexts: list[PregameContext], *, total_prepared: int | None = None, limit: int = 10) -> list[tuple[str,str]]:
