@@ -40,13 +40,6 @@ LIVE_RUNNING_STALE_MINUTES=12
 
 
 async def run_live_scheduled(settings: Settings) -> dict:
-    """Cheap rolling controller invoked by GitHub roughly every five minutes.
-
-    There are no fixed XX:00/15/30/45 slots anymore. Any successful LIVE run,
-    including a manual one, resets the clock. The controller only calls Highlightly
-    when at least 15 minutes have elapsed since the *start* of the latest successful
-    LIVE scan. Failed runs do not reset the clock, so the next heartbeat retries.
-    """
     local=ZoneInfo(settings.app_timezone); now_local=datetime.now(local); now_utc=datetime.now(timezone.utc)
     if not (settings.app_hour_start<=now_local.hour<=settings.app_hour_end):
         return {"skipped":True,"reason":"fora da janela operacional","hour":now_local.hour}
@@ -96,8 +89,6 @@ async def run_live(
     full_summary=bool(scheduled_slot and scheduled_slot.minute==0)
     run_parameters={"date":target,"force":force,"trigger":trigger}
     if slot_key:
-        # ``slot`` is kept for backward-compatible weekly observability, but in
-        # v0.4.8 it represents the actual rolling-controller execution minute.
         run_parameters.update({"slot":slot_key,"delay_minutes":round(delay_minutes,2)})
     if previous_success_at is not None:
         run_parameters["previous_success_at"]=previous_success_at.isoformat()
@@ -143,8 +134,6 @@ async def run_live(
                 inp=LiveInput(match=m,pre=pre[m.match_id],stats=stats[m.match_id],captured_at=now_utc)
                 analyses.append(analyze(inp,latest_due.get(m.match_id),history.get(m.match_id,[])))
 
-            # Por padrão o LIVE decide exclusivamente por dados esportivos.
-            # Odds ficam opcionais e não bloqueiam nem alteram a recomendação.
             sporting_candidates_count=sum(a.status=="SINAL" for a in analyses)
             price_candidates=[]
             if settings.live_require_price_for_recommendation:
@@ -156,9 +145,7 @@ async def run_live(
                 async def price_one(a):
                     try:
                         payload=await provider.live_odds(a.match_id)
-                        odd=extract_highlightly_live_market_odd(
-                            payload,a.selected_market,a.home_score,a.away_score,settings.highlightly_bookmaker
-                        )
+                        odd=extract_highlightly_live_market_odd(payload,a.selected_market,a.home_score,a.away_score,settings.highlightly_bookmaker)
                         return a.match_id,odd
                     except Exception as exc:
                         LOGGER.info("Odds live indisponíveis %s (%s): %s",a.match_id,a.selected_market,exc)
@@ -173,8 +160,6 @@ async def run_live(
                         apply_no_price_requirement(a)
 
             await db.upsert_live_latest(analyses,settings.live_model_version); await db.insert_snapshots(analyses,settings.live_model_version)
-            # Half-time remains visible in the sheet as INTERVALO, but it can never
-            # create a recommendation/audit entry or be sent to Discord.
             recommendation_analyses=[a for a in analyses if normalize_state(a.state)!="half time"]
             rec_count=await db.insert_recommendations(recommendation_analyses,live_model_version=settings.live_model_version,pre_model_version=settings.pre_model_version,calibration_version=settings.calibration_version)
             match_map={m.match_id:m for m in due}; pre_due={m.match_id:pre[m.match_id] for m in due}; output_errors=[]
@@ -206,8 +191,35 @@ async def run_live(
                                 await discord.send(settings.live_discord_webhook,text); await db.mark_notification(key,sent=True)
                             except Exception as exc:
                                 await db.mark_notification(key,sent=False,error=str(exc)); output_errors.append(f"discord:{exc}")
+
+            # Dedicated strong-alert channel. This is output-only: it does not
+            # change any engine status, index, probability, recommendation or sheet.
+            if settings.live_alerts_discord_enabled and settings.live_alerts_discord_webhook:
+                alert_state,alert_text=discord.live_alerts(
+                    match_map,analyses,
+                    min_index=settings.live_alerts_min_index,
+                    limit=settings.live_alerts_limit,
+                    local_time=(scheduled_slot or now_local).strftime("%H:%M"),
+                )
+                last_alert_payload=await db.latest_sent_notification_payload("discord-live-alerts")
+                last_alert_state=str((last_alert_payload or {}).get("state_hash") or "")
+                if alert_state!=last_alert_state:
+                    notification_slot=slot_key or now_local.isoformat(timespec="minutes")
+                    key=f"live-alerts-state:{notification_slot}:{alert_state}"
+                    payload={"content":alert_text or "","state_hash":alert_state,"slot":notification_slot}
+                    if await db.claim_notification(key,"discord-live-alerts",payload):
+                        if alert_text:
+                            try:
+                                await discord.send(settings.live_alerts_discord_webhook,alert_text); await db.mark_notification(key,sent=True)
+                            except Exception as exc:
+                                await db.mark_notification(key,sent=False,error=str(exc)); output_errors.append(f"discord-alerts:{exc}")
+                        else:
+                            # Persist the empty state without sending anything. If a
+                            # fixture later re-enters the alert zone it can alert again.
+                            await db.mark_notification(key,sent=True)
+
             await db.upsert_api_usage("highlightly","LIVE",provider.usage())
-            metrics={"active":len(live_records),"due":len(due),"processed":len(analyses),"above_55":sum(a.market_index>=settings.live_summary_min_index for a in analyses),"sporting_candidates":sporting_candidates_count,"signals_unpriced":sum(a.status=="SINAL" for a in analyses),"recommendations":sum(a.status=="RECOMENDAÇÃO" for a in analyses),"new_recommendations":rec_count,"price_mode":"REQUIRED" if settings.live_require_price_for_recommendation else "IGNORED","odds_candidates":len(price_candidates),"priced":sum(a.market_odd is not None for a in analyses),"post_goal_cooldowns":sum(bool((a.raw.get("event_state") or {}).get("post_goal_active")) for a in analyses),"stale_blocks":sum(bool((a.raw.get("data_freshness") or {}).get("stale_block")) for a in analyses),"emergency_pre":emergency,"output_errors":output_errors,"api":provider.usage()}
+            metrics={"active":len(live_records),"due":len(due),"processed":len(analyses),"above_55":sum(a.market_index>=settings.live_summary_min_index for a in analyses),"strong_alerts":sum(a.status=="RECOMENDAÇÃO" or a.market_index>=settings.live_alerts_min_index for a in analyses if normalize_state(a.state)!="half time"),"sporting_candidates":sporting_candidates_count,"signals_unpriced":sum(a.status=="SINAL" for a in analyses),"recommendations":sum(a.status=="RECOMENDAÇÃO" for a in analyses),"new_recommendations":rec_count,"price_mode":"REQUIRED" if settings.live_require_price_for_recommendation else "IGNORED","odds_candidates":len(price_candidates),"priced":sum(a.market_odd is not None for a in analyses),"post_goal_cooldowns":sum(bool((a.raw.get("event_state") or {}).get("post_goal_active")) for a in analyses),"stale_blocks":sum(bool((a.raw.get("data_freshness") or {}).get("stale_block")) for a in analyses),"emergency_pre":emergency,"output_errors":output_errors,"api":provider.usage()}
             await db.finish_run(run_id,status="SUCCESS",duration_ms=int((time.perf_counter()-started)*1000),metrics=metrics); return metrics
         except Exception as exc:
             await db.upsert_api_usage("highlightly","LIVE",provider.usage()); await db.finish_run(run_id,status="ERROR",duration_ms=int((time.perf_counter()-started)*1000),metrics={"api":provider.usage()},error={"type":type(exc).__name__,"message":str(exc)}); raise

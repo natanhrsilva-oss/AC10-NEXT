@@ -1,0 +1,16 @@
+AC10 NEXT v0.4.10
+
+Alterados:
+- .github/workflows/20-live.yml
+- .env.example
+- pyproject.toml
+- src/ac10next/settings.py
+- src/ac10next/outputs/discord.py
+- src/ac10next/pipelines/live.py
+- tests/test_discord.py
+
+Novo:
+- FIX_v0.4.10.md
+
+Novo secret obrigatório para o canal dedicado:
+- DISCORD_WEBHOOK_LIVE_ALERTS

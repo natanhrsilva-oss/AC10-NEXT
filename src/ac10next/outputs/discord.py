@@ -85,13 +85,8 @@ def live_summary(
     total_with_data: int | None = None,
     local_time: str | None = None,
 ) -> tuple[str,str] | None:
-    """Build the operational LIVE panorama plus the best current opportunities.
-
-    The first tuple item is a stable state hash. The pipeline compares it with the
-    last sent state so :15/:30/:45 messages are only emitted when something
-    meaningful changed. Hourly :00 summaries are always allowed by the pipeline.
-    """
-    del pre  # kept in the signature for compatibility and future context use
+    """Build the operational LIVE panorama plus the best current opportunities."""
+    del pre
     running=[a for a in analyses if normalize_state(a.state)!="half time"]
     if not running:
         return None
@@ -141,7 +136,6 @@ def live_summary(
             lines.append("")
     text="\n".join(lines).strip()
     if len(text)>1900:
-        # Keep the panorama intact and compact only fixture metadata.
         compact=lines[:6]+["","🏆 **MELHORES OPORTUNIDADES**"]
         for i,a in enumerate(top,1):
             m=matches.get(a.match_id)
@@ -152,6 +146,89 @@ def live_summary(
             compact.append(f"**{a.selected_market}** | Índ. **{a.market_index:.1f}** | Prob. **{a.selected_probability:.1f}%** | Gol10 **{a.chance_goal_10:.1f}%**")
         text="\n".join(compact).strip()
     return _live_state_hash(running,min_index=min_index),text
+
+
+def live_alerts(
+    matches: dict[str, MatchRecord],
+    analyses: list[LiveAnalysis],
+    *,
+    min_index: float = 60.0,
+    limit: int = 8,
+    local_time: str | None = None,
+) -> tuple[str, str | None]:
+    """Build the dedicated strong-alert feed.
+
+    Qualification is intentionally simple and does not alter the sports engine:
+    RECOMENDAÇÃO always qualifies; otherwise market_index >= min_index qualifies.
+    Icons are exclusive so the reason is obvious at a glance:
+    ✅ = recommendation, 🔥 = high index only.
+    """
+    running=[a for a in analyses if normalize_state(a.state)!="half time"]
+    qualified=[a for a in running if a.status=="RECOMENDAÇÃO" or a.market_index>=min_index]
+    priority={"RECOMENDAÇÃO":2}
+    qualified=sorted(
+        qualified,
+        key=lambda a:(priority.get(a.status,1),a.market_index,a.confirmation_count,a.selected_probability),
+        reverse=True,
+    )
+
+    # Do not include minute or small metric fluctuations: the alert is resent only
+    # when the qualifying set/category/market/score changes. If a high-index game
+    # becomes a recommendation, category changes and a fresh alert is sent.
+    state=[
+        (
+            a.match_id,
+            "recommendation" if a.status=="RECOMENDAÇÃO" else "high_index",
+            a.selected_market,
+            a.home_score,
+            a.away_score,
+        )
+        for a in qualified
+    ]
+    state_hash=hashlib.sha1(json.dumps(state,sort_keys=True).encode()).hexdigest()[:20]
+    if not qualified:
+        return state_hash,None
+
+    stamp=f" — {local_time}" if local_time else ""
+    recs=sum(a.status=="RECOMENDAÇÃO" for a in qualified)
+    highs=sum(a.status!="RECOMENDAÇÃO" for a in qualified)
+    lines=[
+        f"🚨 **AC10 LIVE — ALERTAS{stamp}**",
+        f"✅ Recomendações: **{recs}** | 🔥 Índice ≥{min_index:.0f}: **{highs}**",
+        "",
+    ]
+    shown=qualified[:limit]
+    for a in shown:
+        m=matches.get(a.match_id)
+        if not m:
+            continue
+        is_rec=a.status=="RECOMENDAÇÃO"
+        icon="✅" if is_rec else "🔥"
+        label="RECOMENDAÇÃO" if is_rec else "ÍNDICE ALTO"
+        reason="Recomendação AC10" if is_rec else f"Índice ≥{min_index:.0f}"
+        fair=f"{a.fair_odd:.2f}" if a.fair_odd else "ND"
+        mom_delta=abs(float(a.home_momentum)-float(a.away_momentum))
+        lines.append(f"{icon} **{label} — {m.home_team} x {m.away_team}** {a.minute}' | **{a.home_score} x {a.away_score}** | **({_location(m)})**")
+        lines.append(f"Entrada: **{a.selected_market}** | Índice **{a.market_index:.1f}** | Prob. **{a.selected_probability:.1f}%** | Conf. **{a.confirmation_count}/5**")
+        lines.append(f"Odd justa **{fair}** | Gol 10m **{a.chance_goal_10:.1f}%** | +1,5 gols **{a.over15_more_probability:.1f}%** | Mom. Δ **{mom_delta:.1f}**")
+        lines.append(f"Motivo: **{reason}**")
+        lines.append("")
+    if len(qualified)>len(shown):
+        lines.append(f"+ **{len(qualified)-len(shown)}** alerta(s) adicional(is) neste ciclo.")
+    text="\n".join(lines).strip()
+    if len(text)>1900:
+        compact=[f"🚨 **AC10 LIVE — ALERTAS{stamp}**",f"✅ Recomendações: **{recs}** | 🔥 Índice ≥{min_index:.0f}: **{highs}**",""]
+        for a in shown:
+            m=matches.get(a.match_id)
+            if not m:
+                continue
+            is_rec=a.status=="RECOMENDAÇÃO"
+            icon="✅" if is_rec else "🔥"
+            label="RECOMENDAÇÃO" if is_rec else "ÍNDICE ALTO"
+            compact.append(f"{icon} **{label} — {_ellipsize(m.home_team,18)} x {_ellipsize(m.away_team,18)}** {a.minute}' | **{a.home_score} x {a.away_score}**")
+            compact.append(f"**{a.selected_market}** | Índ. **{a.market_index:.1f}** | Prob. **{a.selected_probability:.1f}%** | Gol10 **{a.chance_goal_10:.1f}%**")
+        text="\n".join(compact).strip()
+    return state_hash,text
 
 
 def weekly_audit_summary(stats: dict[str,Any], reliability: dict[str,int], *, expected_live_slots: int) -> str:
@@ -201,8 +278,6 @@ def weekly_audit_summary(stats: dict[str,Any], reliability: dict[str,int], *, ex
 
 
 def pre_summaries(matches: dict[str,MatchRecord], contexts: list[PregameContext], *, total_prepared: int | None = None, limit: int = 10) -> list[tuple[str,str]]:
-    # Selection is already quality-ranked by the PRE engine. Preserve the best
-    # N first, then reorder only those selected fixtures chronologically.
     selected=list(contexts[:limit])
     if not selected:
         return []
@@ -248,7 +323,6 @@ def pre_summaries(matches: dict[str,MatchRecord], contexts: list[PregameContext]
     recommendation_lines.append("──────────")
     recommendations_text="\n".join(recommendation_lines).strip()
     if len(recommendations_text) > 1900:
-        # Preserve all selected games and never let Discord cut a fixture in half.
         compact=["🎯 **AC10 PRE — MELHORES DO DIA**",""]
         for i,p in enumerate(top,1):
             m=matches[p.match_id]; precision=dict(p.raw.get("precision") or {})
@@ -268,7 +342,6 @@ def pre_summaries(matches: dict[str,MatchRecord], contexts: list[PregameContext]
 
 
 def pre_summary(matches: dict[str,MatchRecord], contexts: list[PregameContext], *, total_prepared: int | None = None, limit: int = 10) -> tuple[str,str] | None:
-    """Backward-compatible helper returning the detailed PRE list only."""
     messages=pre_summaries(matches,contexts,total_prepared=total_prepared,limit=limit)
     return messages[-1] if messages else None
 

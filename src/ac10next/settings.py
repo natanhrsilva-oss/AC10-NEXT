@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     discord_webhook_url: str = ""
     discord_webhook_pre: str = ""
     discord_webhook_live: str = ""
+    discord_webhook_live_alerts: str = ""
     google_sheets_webapp_url: str = ""
     google_sheets_token: str = ""
 
@@ -63,6 +64,8 @@ class Settings(BaseSettings):
     live_require_price_for_recommendation: bool = False
     live_summary_min_index: float = 55.0
     live_summary_limit: int = 5
+    live_alerts_min_index: float = 60.0
+    live_alerts_limit: int = 8
     sheet_history_limit: int = 1000
 
     min_back_odd: float = 1.60
@@ -72,6 +75,7 @@ class Settings(BaseSettings):
 
     pre_discord_enabled: bool = True
     live_discord_enabled: bool = True
+    live_alerts_discord_enabled: bool = True
     sheets_enabled: bool = True
 
     @property
@@ -83,6 +87,11 @@ class Settings(BaseSettings):
     def live_discord_webhook(self) -> str:
         """LIVE uses its own channel, with legacy webhook as fallback."""
         return self.discord_webhook_live.strip() or self.discord_webhook_url.strip()
+
+    @property
+    def live_alerts_discord_webhook(self) -> str:
+        """Strong LIVE alerts use a dedicated channel; no fallback avoids duplicate spam."""
+        return self.discord_webhook_live_alerts.strip()
 
     @property
     def database_enabled(self) -> bool:
