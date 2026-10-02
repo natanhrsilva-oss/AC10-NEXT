@@ -17,6 +17,24 @@ def _date_range(start: date, end: date) -> list[date]:
     return [start+timedelta(days=i) for i in range(days+1)]
 
 
+def _finished_with_pending_recommendations(
+    finished: list[tuple[object, dict]],
+    by_match: dict[str, list[dict]],
+) -> list[tuple[object, dict]]:
+    """Keep only provider matches that actually have AC10 recommendations to audit.
+
+    Highlightly returns every finished fixture in the requested date range. Persisting
+    all of them to ac10_results is both unnecessary and unsafe because ac10_results
+    references ac10_matches. Only matches with pending AC10 recommendations need a
+    final result persisted/evaluated.
+    """
+    return [
+        (match, raw)
+        for match, raw in finished
+        if str(getattr(match, "match_id", "")) in by_match
+    ]
+
+
 async def run_audit(settings: Settings, target_date: str | None = None) -> dict:
     """Run the weekly PRE/LIVE audit and publish one consolidated report.
 
@@ -54,22 +72,36 @@ async def run_audit(settings: Settings, target_date: str | None = None) -> dict:
 
             finished=list(finished_by_id.values())
             ids=list(finished_by_id)
+
+            # First discover which finished fixtures actually have pending AC10
+            # recommendations. Do not persist results for unrelated provider games.
             pending=await db.pending_audits(ids)
             by_match:dict[str,list[dict]]={}
             for rec in pending:
                 by_match.setdefault(str(rec["match_id"]),[]).append(rec)
 
+            relevant_finished=_finished_with_pending_recommendations(finished,by_match)
+
             audited=greens=reds=pending_ht=0
-            for m,raw in finished:
+            for m,raw in relevant_finished:
+                recs=by_match.get(str(m.match_id),[])
+                if not recs:
+                    continue
+
                 fh,fa=parse_score(raw)
+
+                # Safe now: a recommendation can only reference an AC10 match, so
+                # ac10_results' FK is satisfied. Unrelated Highlightly fixtures never
+                # reach this write.
                 await db.upsert_result(m.match_id,fh,fa,raw)
-                recs=by_match.get(m.match_id,[])
+
                 ht_goals=None
                 if any(str(r.get("market") or "")=="GOL HT" for r in recs):
                     try:
                         ht_goals=first_half_goal_count(await provider.events(m.match_id))
                     except Exception:
                         ht_goals=None
+
                 for rec in recs:
                     result,pnl,detail=evaluate_recommendation(rec,fh,fa,ht_goals=ht_goals)
                     await db.insert_audit(str(rec["id"]),result,pnl,detail)
@@ -111,6 +143,8 @@ async def run_audit(settings: Settings, target_date: str | None = None) -> dict:
                 "report_end":end_date.isoformat(),
                 "recovery_start":recovery_start.isoformat(),
                 "finished":len(finished),
+                "finished_relevant":len(relevant_finished),
+                "pending_recommendations":len(pending),
                 "audited":audited,
                 "green":greens,
                 "red":reds,
