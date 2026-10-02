@@ -1,5 +1,7 @@
 name: "10 - AC10 PRE"
 
+run-name: "PRE | ${{ github.event_name }} | ${{ inputs.source || 'github-schedule' }}"
+
 on:
   workflow_dispatch:
     inputs:
@@ -7,12 +9,17 @@ on:
         description: "Data opcional YYYY-MM-DD"
         required: false
         type: string
+      source:
+        description: "Origem do disparo (manual/supabase)"
+        required: false
+        default: "manual"
+        type: string
   schedule:
-    # Brasília (UTC-3): 06:00 principal; 06:30 e 07:00 são watchdogs.
-    # TODOS usam --if-missing: depois de um PRE SUCCESS no dia, nenhuma execução automática roda de novo.
-    - cron: "0 9 * * *"
-    - cron: "30 9 * * *"
-    - cron: "0 10 * * *"
+    # BACKUP do relógio primário do Supabase.
+    # Brasília (UTC-3): 03:15 e 03:30.
+    # Ambos usam --if-missing: após um PRE SUCCESS no dia, não executam novamente.
+    - cron: "15 6 * * *"
+    - cron: "30 6 * * *"
 
 permissions:
   contents: read
@@ -31,6 +38,7 @@ jobs:
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       DISCORD_WEBHOOK_PRE: ${{ secrets.DISCORD_WEBHOOK_PRE }}
       DISCORD_WEBHOOK_LIVE: ${{ secrets.DISCORD_WEBHOOK_LIVE }}
+      DISCORD_WEBHOOK_LIVE_ALERTS: ${{ secrets.DISCORD_WEBHOOK_LIVE_ALERTS }}
       GOOGLE_SHEETS_WEBAPP_URL: ${{ secrets.GOOGLE_SHEETS_WEBAPP_URL }}
       GOOGLE_SHEETS_TOKEN: ${{ secrets.GOOGLE_SHEETS_TOKEN }}
       APP_TIMEZONE: America/Sao_Paulo
@@ -44,15 +52,27 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .
+      - name: Show trigger
+        shell: bash
+        run: |
+          echo "event=${{ github.event_name }}"
+          echo "source=${{ inputs.source || 'github-schedule' }}"
+          echo "date=${{ inputs.date || 'today' }}"
       - name: Run PRE
         shell: bash
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ -n "${{ inputs.date }}" ]; then
+            if [ "${{ inputs.source }}" = "supabase" ]; then
+              # Supabase é automático: nunca duplica um PRE SUCCESS do mesmo dia.
+              ac10-next pre --if-missing
+            elif [ -n "${{ inputs.date }}" ]; then
+              # Manual com data explícita continua forçando a execução solicitada.
               ac10-next pre --date "${{ inputs.date }}"
             else
+              # Manual sem data continua funcionando exatamente como antes.
               ac10-next pre
             fi
           else
+            # Scheduler nativo do GitHub é apenas backup.
             ac10-next pre --if-missing
           fi
